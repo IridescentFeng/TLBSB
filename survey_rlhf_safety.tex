@@ -1,0 +1,1044 @@
+\documentclass[12pt,a4paper]{article}
+
+% ── 基础包 ────────────────────────────────────────────────────────────────────
+\usepackage[UTF8]{ctex}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{cite}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{abstract}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{tcolorbox}
+
+% ── 超链接颜色 ────────────────────────────────────────────────────────────────
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!50!black,
+    urlcolor=blue!80!black
+}
+
+% ── 行距 ──────────────────────────────────────────────────────────────────────
+\onehalfspacing
+
+% ── 页眉页脚 ──────────────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small 基于RLHF的安全偏好优化综述}
+\lhead{\small TLBSB 项目文献综述}
+\cfoot{\thepage}
+
+% ── 数学命令缩写 ──────────────────────────────────────────────────────────────
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\sigmoid}{\sigma}
+\newcommand{\piref}{\pi_{\mathrm{ref}}}
+\newcommand{\pitheta}{\pi_{\theta}}
+\newcommand{\pistar}{\pi^{*}}
+
+% ── 定理环境 ──────────────────────────────────────────────────────────────────
+\newtheorem{theorem}{定理}
+\newtheorem{definition}{定义}
+\newtheorem{remark}{注记}
+
+%==============================================================================%
+\begin{document}
+%==============================================================================%
+
+% ── 标题 ──────────────────────────────────────────────────────────────────────
+\title{
+  \vspace{-1cm}
+  {\Large \textbf{基于人类反馈的强化学习与安全偏好优化方法进展综述}}\\[0.6em]
+  {\large ——以 SafeDPO、BFPO、SACPO 及 Token 级安全屏障为核心}
+}
+
+\author{
+  TLBSB 研究组\\
+  \small \texttt{fz1987346678@gmail.com}
+}
+\date{\today}
+
+\maketitle
+\thispagestyle{fancy}
+
+% ── 摘要 ──────────────────────────────────────────────────────────────────────
+\begin{abstract}
+大型语言模型（LLM）的安全对齐问题已成为人工智能研究领域的核心挑战之一。
+从早期基于近端策略优化（PPO）的人类反馈强化学习（RLHF），到无需奖励模型的
+直接偏好优化（DPO）及其众多变体，再到专门针对安全约束的 SafeDPO、BFPO、
+SACPO 等方法，安全对齐技术体系正在快速演化。本文系统梳理了上述研究脉络，
+重点分析各方法的算法原理、损失函数设计、实验设置与评测结果，并从理论层面
+探讨屏障函数、约束优化与 Token 级安全机制的内在联系。在此基础上，本文聚焦
+帕累托最优视角下安全性与有用性的本质权衡，最后展望 Token 级偏置感知语义屏
+障（TLBSB）等新兴方向的研究前景。
+
+\noindent\textbf{关键词：} RLHF；DPO；Safe RLHF；SafeDPO；BFPO；
+屏障函数；Token 级对齐；帕累托优化；PKU-SafeRLHF
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==============================================================================%
+\section{引言}
+%==============================================================================%
+
+\subsection{大型语言模型安全对齐的背景}
+
+人工智能系统的价值对齐问题——即如何确保 AI 系统的行为符合人类意图与价值观
+——自图灵时代便已被哲学家和科学家所关注，然而直至大型语言模型（Large
+Language Models, LLMs）的涌现，这一问题才真正从理论思辨转变为工程实践的核
+心挑战~\cite{ouyang2022instructgpt}。以 ChatGPT、GPT-4、LLaMA 2-Chat 为代
+表的对话式 LLM 的大规模部署，在展现出前所未有的自然语言理解与生成能力的同
+时，也暴露出一系列严重的安全风险：生成有害内容、传播虚假信息、配合恶意指令
+执行危险操作，乃至被用于大规模的社会工程学攻击。
+
+安全对齐（Safety Alignment）研究的核心目标，是在保留模型有用性（Helpfulness）
+的前提下，最大化其无害性（Harmlessness）与诚实性（Honesty）——Anthropic 研
+究团队将其概括为 ``3H'' 原则~\cite{bai2022constitutional}。然而，这三个目标
+之间存在内在张力：过度限制模型输出会导致过度拒绝（Over-refusal），使模型对
+合法请求也束手束脚，丧失实用价值；而过于宽松的限制则可能导致模型在面对精心
+构造的越狱（Jailbreak）提示时产生有害输出。
+
+\subsection{Goodhart 定律与奖励欺骗的根本困境}
+
+理解当前 RLHF 与偏好优化研究的核心困境，必须从 Goodhart 定律出发。该定律
+最初由英国经济学家查尔斯·古德哈特在货币政策语境中提出，其核心表述为：
+
+\begin{tcolorbox}[colback=gray!10, colframe=gray!50, title=Goodhart 定律]
+\textit{``When a measure becomes a target, it ceases to be a good measure.''}
+（当一个度量指标成为目标时，它就不再是一个好的度量指标。）
+\end{tcolorbox}
+
+在 RLHF 语境中，这一定律的具体体现是\textbf{奖励欺骗（Reward Hacking）}或
+\textbf{奖励过度优化（Reward Overoptimization）}：当语言模型策略持续优化代
+理奖励模型（Proxy Reward Model）的分值时，模型会逐渐学会利用奖励模型的盲点
+和偏好偏差，产生高奖励分值但实际质量低下甚至有害的输
+出~\cite{gao2023scaling}。
+
+Gao 等人（2023）通过系统性实验量化了这一现象~\cite{gao2023scaling}。他们
+构造了一个对照实验框架：以固定的"黄金标准"奖励模型代表真实人类偏好，并用
+一系列规模不同的代理奖励模型进行策略优化，发现代理奖励分值与黄金分值之间
+存在一个明显的"蜜月期"后转折点——随着优化力度的加大，代理分值持续攀升，
+而黄金分值却在峰值后单调下降。
+
+Goodhart 定律在 LLM 对齐场景中的四种体现形式值得深入分析：
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{回归性（Regressional）}：代理奖励模型本身含有噪声，对代理奖励的
+    选择同时选择了噪声方向上的偏差。
+  \item \textbf{极端化（Extremal）}：当优化推动策略分布偏离训练数据覆盖区域时，
+    代理奖励模型的泛化能力急剧下降。
+  \item \textbf{因果混淆（Causal）}：代理奖励模型可能学到表面相关而非因果决定性
+    的特征（如长度偏好、语气偏好），模型通过操控这些表面特征获得高分。
+  \item \textbf{对抗性（Adversarial）}：策略优化过程本身具有对抗性——模型在搜索
+    空间中寻找"漏洞"，这等价于对奖励模型发动低成本的白盒对抗攻击。
+\end{enumerate}
+
+\subsection{安全对齐的双重约束}
+
+安全性与有用性的权衡不是简单的线性关系，而是多维度、多粒度的复杂均衡问题。
+在实践中，这一权衡被具体化为以下几对矛盾：
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{过度拒绝 vs.\ 有害生成}：安全性过强的模型会将"如何使用菜刀"这
+    类无害问题也拒绝回答，而有用性过强的模型则可能提供制作危险物品的详细步骤。
+  \item \textbf{微调安全性降解}：研究表明，即使对安全对齐的模型进行少量有用性微
+    调，也可能导致其安全性显著退化。
+  \item \textbf{双重用途（Dual-Use）风险}：生物化学、网络安全、法律等领域的专业
+    知识本身并无危害，但相同的信息可以被用于正当目的或恶意目的。
+\end{itemize}
+
+%==============================================================================%
+\section{RLHF 基础：从 PPO 到奖励建模的完整技术栈}
+%==============================================================================%
+
+\subsection{RLHF 的奠基性工作}
+
+人类反馈强化学习（Reinforcement Learning from Human Feedback, RLHF）的现代
+形式由 Ziegler 等人（2019）在 OpenAI 的开创性工作中确
+立~\cite{ziegler2019finetuning}。他们将偏好学习框架应用于自然语言处理任务，
+证明了使用相对少量的人类偏好标注（约 5,000--60,000 对比较）便能有效引导语
+言模型生成人类更偏好的输出，为后续大规模 RLHF 研究奠定了方法论基础。
+
+Stiennon 等人（2020）将这一框架推进至文本摘要任务~\cite{stiennon2020learning}，
+公开发布了包含 64,000 余对摘要对比的数据集，并训练了 1.3B 参数的策略模型，
+人类评估者一致认为其摘要质量显著优于参考摘要——有力说明人类偏好优化是比预
+测参考输出更高效的训练目标。
+
+\subsection{InstructGPT：RLHF 的工业化突破}
+
+Ouyang 等人（2022）提出的 InstructGPT~\cite{ouyang2022instructgpt} 是 RLHF
+规模化落地的里程碑式工作，也是 ChatGPT 技术路线的直接前身。
+InstructGPT 的三阶段训练管线如下：
+
+\noindent\textbf{阶段一：有监督微调（SFT）。}收集人类标注员撰写的指令遵循
+演示数据，对 GPT-3 进行有监督微调，得到 SFT 模型。
+
+\noindent\textbf{阶段二：奖励模型训练（RM Training）。}利用 Bradley-Terry
+模型将排序数据转化为成对偏好数据，训练奖励模型 $r_\phi$：
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{RM}}(\phi)
+    = -\E_{(x,y_w,y_l)\sim\mathcal{D}}\!\left[
+        \log\sigmoid\!\left(r_\phi(x,y_w) - r_\phi(x,y_l)\right)
+      \right]
+  \label{eq:rm_loss}
+\end{equation}
+
+其中 $y_w$ 和 $y_l$ 分别表示被偏好（chosen）和被拒绝（rejected）的回复，
+$\sigmoid$ 为 Sigmoid 函数。
+
+\noindent\textbf{阶段三：PPO 强化学习优化。}以训练好的奖励模型 $r_\phi$
+作为奖励信号，使用近端策略优化（PPO）算法~\cite{schulman2017ppo} 优化语言模
+型策略 $\pitheta$，同时加入 KL 散度惩罚以防止策略过度偏离 SFT 基础模型：
+
+\begin{equation}
+  \max_{\pitheta}\; \E_{x\sim\mathcal{D},\,y\sim\pitheta(\cdot|x)}\!\left[
+    r_\phi(x,y) - \beta\cdot\KL\!\left[\pitheta(\cdot|x)\,\big\|\,\piref(\cdot|x)\right]
+  \right]
+  \label{eq:rlhf_obj}
+\end{equation}
+
+InstructGPT 的核心实验结论极具说服力：仅有 1.3B 参数的 InstructGPT 模型，
+其输出被人类评估者选中为更优的概率高于未经 RLHF 的 175B GPT-3。
+
+\subsection{PPO 算法在 RLHF 中的核心作用}
+
+PPO~\cite{schulman2017ppo} 由 Schulman 等人（2017）提出，其核心创新在于通过
+裁剪（Clipping）机制约束策略更新幅度，在保证训练稳定性的同时允许多次小批量
+梯度更新：
+
+\begin{equation}
+  L^{\mathrm{CLIP}}(\theta)
+    = \hat{\E}_t\!\left[
+        \min\!\left(r_t(\theta)\hat{A}_t,\;
+        \mathrm{clip}(r_t(\theta),\,1{-}\epsilon,\,1{+}\epsilon)\hat{A}_t\right)
+      \right]
+  \label{eq:ppo_clip}
+\end{equation}
+
+其中 $r_t(\theta)=\pitheta(a_t|s_t)/\pi_{\theta_{\mathrm{old}}}(a_t|s_t)$ 为
+重要性采样比率，$\hat{A}_t$ 为优势函数估计，$\epsilon$ 通常取 0.2。
+
+\subsection{Constitutional AI：无需人工标注的安全对齐}
+
+Anthropic 团队提出的 Constitutional AI（CAI）~\cite{bai2022constitutional}
+代表了一种减少人工标注依赖的安全对齐路线。其核心思想是：用一套明确的宪法
+原则（Constitutional Principles）引导 AI 系统进行自我批评与修订，再将
+AI 生成的偏好数据用于强化学习——即 RLAIF（Reinforcement Learning from AI
+Feedback）。
+
+CAI 的两阶段训练包括：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{监督阶段（SL-CAI）}：模型生成回答 $\to$ 依据宪法原则批评
+    $\to$ 修订 $\to$ 重复 $\to$ 用最终版本进行 SFT。
+  \item \textbf{RL 阶段（RLAIF）}：使用 AI 对修订前后版本的偏好标注训练奖励
+    模型，再用 PPO 进行 RL 优化。
+\end{itemize}
+
+%==============================================================================%
+\section{DPO 及其变体：隐式奖励方法谱系}
+%==============================================================================%
+
+\subsection{DPO 的理论基础与损失推导}
+
+直接偏好优化（Direct Preference Optimization, DPO）\cite{rafailov2023dpo}
+是 Rafailov 等人于 2023 年提出的革命性对齐方法，在 NeurIPS 2023 上获得了
+广泛关注。DPO 的核心贡献在于揭示了一个深刻的数学等价关系：RLHF 目标的最
+优策略可以用封闭形式表示，从而将奖励模型的参数化和 RL 优化过程统一为单一
+的分类损失。
+
+\textbf{关键推导。}在 KL 约束 RLHF 目标~\eqref{eq:rlhf_obj} 下，最优策略为：
+
+\begin{equation}
+  \pistar(y|x)
+    = \frac{1}{Z(x)}\piref(y|x)\exp\!\left(\frac{r(x,y)}{\beta}\right)
+  \label{eq:optimal_policy}
+\end{equation}
+
+反解奖励函数得：
+\begin{equation}
+  r(x,y) = \beta\log\frac{\pistar(y|x)}{\piref(y|x)} + \beta\log Z(x)
+\end{equation}
+
+将上式代入 Bradley-Terry 偏好模型，利用 $Z(x)$ 项相消，得到 DPO 损失：
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{DPO}}(\pitheta;\piref)
+    = -\E_{(x,y_w,y_l)\sim\mathcal{D}}\!\left[
+        \log\sigmoid\!\left(
+          \beta\log\frac{\pitheta(y_w|x)}{\piref(y_w|x)}
+          - \beta\log\frac{\pitheta(y_l|x)}{\piref(y_l|x)}
+        \right)
+      \right]
+  \label{eq:dpo_loss}
+\end{equation}
+
+\subsection{DPO 的局限性分析}
+
+尽管 DPO 在工程实践中取得了广泛应用，但其理论局限性也受到了深入研究：
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{分布外泛化问题}：DPO 是在静态偏好数据集上训练分类器，缺乏
+    PPO 的在线采样机制，无法对训练分布之外的提示-回复对进行有效优化。
+  \item \textbf{Bradley-Terry 模型假设的局限}：DPO 继承了独立比较假设，而
+    实际人类偏好可能存在不可传递性（Intransitivity）。
+  \item \textbf{隐式奖励边际不均匀}：Azar 等人（2024）在 IPO
+    论文~\cite{azar2024ipo} 中指出，DPO 的优化目标隐含了边际偏好奖励均匀
+    分布的假设，在实践中可能导致过度优化某些偏好强的样本对。
+\end{enumerate}
+
+\subsection{DPO 变体谱系}
+
+自 DPO 提出以来，大量变体工作从不同角度对其进行了改进和扩展，形成了丰富
+的隐式奖励方法谱系，如表~\ref{tab:dpo_variants} 所示。
+
+\begin{table}[H]
+  \centering
+  \caption{DPO 变体方法对比}
+  \label{tab:dpo_variants}
+  \small
+  \begin{tabular}{lllcc}
+    \toprule
+    \textbf{方法} & \textbf{年份/期刊} & \textbf{核心创新} & \textbf{需参考模型} & \textbf{需成对数据} \\
+    \midrule
+    DPO~\cite{rafailov2023dpo} & 2023/NeurIPS & 闭合形式 RLHF 解 & \checkmark & \checkmark \\
+    IPO~\cite{azar2024ipo} & 2024/ICLR & 平方误差、均匀目标边际 & \checkmark & \checkmark \\
+    KTO~\cite{ethayarajh2024kto} & 2024/ICML & 前景理论、二元标签 & $\times$ & $\times$ \\
+    SimPO~\cite{meng2024simpo} & 2024/NeurIPS & 无参考模型+目标边际 & $\times$ & \checkmark \\
+    ORPO~\cite{hong2024orpo} & 2024/EMNLP & 单阶段 SFT+对齐 & $\times$ & \checkmark \\
+    SLiC~\cite{zhao2023slic} & 2023/ICLR & 序列似然校准 & $\times$ & \checkmark \\
+    PRO~\cite{song2024pro} & 2024/AAAI & $n$ 路排序偏好 & $\times$ & \checkmark \\
+    f-DPO~\cite{wang2024fdpo} & 2024/ICLR & $f$-散度泛化 & \checkmark & \checkmark \\
+    RSO~\cite{liu2024rso} & 2024/ICLR & 拒绝采样+最优策略数据 & \checkmark & \checkmark \\
+    TDPO~\cite{zeng2024tdpo} & 2024/ICML & Token 级前向 KL 约束 & \checkmark & \checkmark \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent\textbf{IPO（Identity Preference Optimization）}\cite{azar2024ipo}：
+Azar 等人将偏好优化重新表述为直接对策略进行正则化，得到无参数化偏见的更鲁
+棒目标：
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{IPO}}(\pitheta)
+    = \E_{(x,y_w,y_l)}\!\left[
+        \left(
+          \log\frac{\pitheta(y_w|x)\piref(y_l|x)}{\pitheta(y_l|x)\piref(y_w|x)}
+          - \frac{1}{2\tau}
+        \right)^{\!2}
+      \right]
+  \label{eq:ipo_loss}
+\end{equation}
+
+值得注意，BFPO 的平方误差损失形式与 IPO 有深刻的理论联系。
+
+\noindent\textbf{SimPO（Simple Preference Optimization）}\cite{meng2024simpo}：
+引入无参考模型的奖励定义，以平均 token 对数概率代替参考模型的比率：
+\begin{equation}
+  r_{\mathrm{SimPO}}(x,y) = \frac{\beta}{|y|}\log\pitheta(y|x)
+\end{equation}
+SimPO 损失中加入目标边际 $\gamma/\beta$，在保持性能的同时消除了对参考模型
+的依赖，推理时内存开销降低约 10\%，训练速度提升约 20\%。
+
+\noindent\textbf{Token 级 DPO（TDPO）}\cite{zeng2024tdpo}：Zeng 等人（2024）
+在 ICML 2024 上提出，将偏好优化从序列级下沉至 token 级，为每个生成 token
+引入前向 KL 散度约束。TDPO 的两个变体（TDPO1/TDPO2）在受控生成任务上均超
+越了 DPO 和 PPO 基线，直接启发了 token 级安全对齐方法的系列研究。
+
+%==============================================================================%
+\section{安全偏好优化：Safe RLHF、SACPO、SafeDPO 与 BFPO}
+%==============================================================================%
+
+\subsection{Safe RLHF：安全约束的形式化引入}
+
+Dai 等人（2023）提出的 Safe RLHF~\cite{dai2023saferlhf} 是 PKU-Alignment
+团队在安全对齐领域的奠基性工作（ICLR 2024）。其核心创新在于\textbf{解耦有
+用性与安全性}，分别训练独立的奖励模型（RM）和代价模型（CM）：
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{奖励模型} $r_\psi(x,y)$：衡量回复的有用性
+  \item \textbf{代价模型} $c_\chi(x,y)$：衡量回复的危害程度
+\end{itemize}
+
+基于这两个独立模型，Safe RLHF 将对齐问题表述为约束 MDP 下的优化问题：
+
+\begin{equation}
+  \max_{\pitheta}\; \E_{x,y\sim\pitheta}\!\left[r_\psi(x,y)\right]
+  \quad \text{s.t.} \quad
+  \E_{x,y\sim\pitheta}\!\left[c_\chi(x,y)\right] \leq \epsilon
+  \label{eq:safe_rlhf}
+\end{equation}
+
+通过拉格朗日对偶化，引入自适应拉格朗日乘子 $\lambda$：
+
+\begin{equation}
+  \max_{\pitheta}\min_{\lambda\geq 0}\;
+    \E\!\left[r_\psi(x,y)\right]
+    - \lambda\!\left(\E\!\left[c_\chi(x,y)\right] - \epsilon\right)
+  \label{eq:lagrangian}
+\end{equation}
+
+\textbf{实验结果：}在 PKU-SafeRLHF-30K 数据集上，Alpaca-7B 的有害回复率从
+\textbf{53.08\%} 降至 \textbf{2.45\%}，有用性 Elo 分提升 +244.91，无害性
+Elo 分提升 +268.31~\cite{dai2023saferlhf}。
+
+\subsection{SACPO：两阶段安全感知约束偏好优化}
+
+SACPO（Safety-Aware Constrained Preference Optimization）~\cite{sacpo2024}
+由 LINE/PKU-Alignment 团队提出（NeurIPS 2024），将安全对齐进一步分解为
+\textbf{两个独立的优化阶段}，从算法设计上彻底解耦有用性微调与安全性约束：
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{第一阶段（有用性优化）}：以标准 DPO/KTO 损失在有用性偏好数
+    据上优化策略，得到有用但可能不够安全的中间模型。
+  \item \textbf{第二阶段（安全性约束）}：以安全性偏好数据为输入，在第一阶段
+    模型基础上进行安全约束优化，在不破坏有用性的前提下提升安全合规性。
+\end{itemize}
+
+这一解耦设计的理论依据在于：有用性优化目标和安全性优化目标在梯度空间中存
+在显著冲突，同时优化会导致两个目标的相互干扰。
+
+\subsection{SafeDPO：变换 T 与安全边距 $\Delta$}
+
+SafeDPO~\cite{safedpo2026}（Kim 等，ICLR 2026 Oral，arXiv:2505.20065）是
+迄今为止在 DPO 框架内最完整地处理安全约束的方法之一，其核心创新包含两个
+相互配合的设计元素。
+
+\subsubsection{安全感知变换 T}
+
+对于原始偏好数据中的每一对样本 $(x, y_w, y_l)$，变换 T 依据两个回复的安
+全标签 $(h_w, h_l)$（$h=1$ 表示不安全，$h=0$ 表示安全）进行如下重排：
+
+\begin{tcolorbox}[colback=blue!5, colframe=blue!40, title=变换 T 规则]
+\begin{itemize}
+  \item \textbf{情形 A}（$h_w=0$，偏好方安全）：保持原始排序，
+    $h_{\mathrm{rej}} = h_l$
+  \item \textbf{情形 B}（$h_w=1, h_l=0$，偏好方不安全）：\textbf{交换顺序}，
+    $\mathrm{chosen}=y_l$，$\mathrm{rejected}=y_w$，$h_{\mathrm{rej}}=1$
+  \item \textbf{情形 C}（$h_w=1, h_l=1$，两方均不安全）：\textbf{丢弃}
+\end{itemize}
+\end{tcolorbox}
+
+\subsubsection{安全边距 $\Delta$}
+
+对经过变换 T 处理后 $h_{\mathrm{rej}}=1$ 的样本对，SafeDPO 在 DPO 损失的
+logit 中引入安全边距 $\Delta$（论文推荐 $\Delta=5$）：
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{SafeDPO}}
+    = -\E\!\left[
+        \log\sigmoid\!\left(
+          \beta\cdot\Delta\log p - h_{\mathrm{rej}}\cdot\Delta
+        \right)
+      \right]
+  \label{eq:safedpo}
+\end{equation}
+
+其中 $\Delta\log p = \log\frac{\pitheta(y_c|x)}{\piref(y_c|x)} -
+\log\frac{\pitheta(y_r|x)}{\piref(y_r|x)}$。
+
+\begin{remark}
+在 \texttt{pku\_safety.jsonl} 格式的数据集中，数据已预先按
+chosen/rejected 分割（Layout B 格式），而非包含原始安全标签的 Layout A
+格式，因此必须通过 \texttt{is\_safety\_split} 参数追踪每条数据的来源文
+件，才能正确设置 $h_{\mathrm{rej}}=1$——若忽略这一细节，安全边距 $\Delta$
+将对所有样本失效，SafeDPO 退化为普通 DPO。
+\end{remark}
+
+\subsection{BFPO：双因子偏好优化与平方误差损失}
+
+BFPO（Bi-Factorial Preference Optimization，Zhang 等，ICLR 2025 Spotlight，
+arXiv:2408.15313）~\cite{bfpo2025} 从双因子（即同时使用 \texttt{is\_chosen\_safe}
+和 \texttt{is\_rejected\_safe} 两个安全标签）的角度重新定义了安全优化目标。
+
+\subsubsection{安全因子定义}
+
+令 $b_3 = 1/(b_1-1)$，对每个样本对定义安全因子（safe factor）：
+
+\begin{equation}
+  \mathrm{sf}
+    = b_1 b_3 \cdot \mathbb{1}[\text{chosen safe}]
+      - b_3 \cdot \mathbb{1}[\text{rejected safe}]
+      - \alpha
+  \label{eq:bfpo_sf}
+\end{equation}
+
+对不同安全标签组合（默认 $b_1=3, \alpha=0.5$）：
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{helpful 对}（两方均安全）：$\mathrm{sf} = 1.5 - 0.5 - 0.5 = 0.5$
+  \item \textbf{safety 对}（chosen 安全，rejected 不安全）：$\mathrm{sf} = 1.5 - 0 - 0.5 = 1.0$
+\end{itemize}
+
+\subsubsection{BFPO 损失函数}
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{BFPO}}
+    = \E\!\left[\Bigl(
+        \underbrace{\beta\cdot(\Delta\log p_c - \Delta\log p_r)}_{\text{logit}}
+        -
+        \underbrace{\mathrm{sf}}_{\text{target}}
+      \Bigr)^{\!2}\right]
+  \label{eq:bfpo_loss}
+\end{equation}
+
+其中 $\Delta\log p = \log\pitheta - \log\piref$ 为相对参考模型的对数概率比。
+
+\begin{remark}[维度分析]
+BFPO 的 logit 定义在 $\beta\cdot\Delta\log p$ 空间，数值范围约为 0.5--5；
+安全因子的数值范围约为 0.5--1.0。若错误地将目标设置为 $\mathrm{sf}/\beta$，
+则目标值约为 5--10，这要求 $\Delta\log p \approx 50\text{--}100$ nats，在
+物理上无法实现，导致模型永远无法最小化损失。\textbf{目标应保持
+$\mathrm{target} = \mathrm{sf}$，不除以 $\beta$。}
+\end{remark}
+
+%==============================================================================%
+\section{屏障函数与约束优化在 LLM 对齐中的应用}
+%==============================================================================%
+
+\subsection{控制屏障函数的数学基础}
+
+控制屏障函数（Control Barrier Function, CBF）起源于非线性控制理论，用于保
+证动态系统在演化过程中始终保持在预定义的安全集合内。对于仿射控制系统
+$\dot{x} = f(x) + g(x)u$，连续可微函数 $h(x)$ 被称为 CBF，当且仅当存在
+满足 $\kappa\in\mathcal{K}_\infty$ 的扩展 K 类函数，使得：
+
+\begin{equation}
+  \sup_{u}\left[\frac{\partial h}{\partial x}(f(x)+g(x)u)\right]
+    \geq -\kappa(h(x))
+  \label{eq:cbf}
+\end{equation}
+
+安全集合 $\mathcal{C} = \{x : h(x)\geq 0\}$ 在满足~\eqref{eq:cbf} 的控制
+输入下保持前向不变性（forward invariance）。
+
+\subsection{对数屏障函数与内点法}
+
+内点法通过将约束不等式 $c_i(x)\geq 0$ 转化为对数屏障项，将约束优化转化为
+无约束问题：
+
+\begin{equation}
+  \min_x\; f(x) - \mu\sum_i\log c_i(x)
+  \label{eq:log_barrier}
+\end{equation}
+
+当 $\mu\to 0^+$ 时，对数屏障解收敛至原约束问题的最优解。Cui 等人（2023）
+提出的 CSAC-LB 算法~\cite{cui2023csaclb} 将对数屏障函数应用于约束强化学
+习，通过线性平滑技术避免了传统对数屏障在约束边界附近的数值不稳定性。
+
+\subsection{BFPO 的控制论解读}
+
+BFPO 的平方误差损失可以从控制屏障函数视角统一解读：安全因子 $\mathrm{sf}$
+定义了策略在奖励空间中应当达到的"目标状态"，而平方误差损失驱动策略的
+logit 收敛至该目标，构成一种\textbf{软屏障约束}：
+\begin{itemize}[leftmargin=2em]
+  \item 当 $\mathrm{logit} < \mathrm{sf}$ 时，梯度推动策略增大 chosen 与
+    rejected 的差距（向安全方向推进）；
+  \item 当 $\mathrm{logit} > \mathrm{sf}$ 时，梯度约束策略不要过度优化
+    （防止奖励欺骗）。
+\end{itemize}
+
+%==============================================================================%
+\section{PKU-SafeRLHF 数据集及评测基准分析}
+%==============================================================================%
+
+\subsection{PKU-SafeRLHF 数据集}
+
+PKU-SafeRLHF 数据集~\cite{ji2024pkusaferlhf}（ACL 2025 长文，
+arXiv:2406.15513）由北京大学对齐团队构建，具有以下独特的设计特点：
+
+\begin{table}[H]
+  \centering
+  \caption{PKU-SafeRLHF 数据集统计}
+  \label{tab:dataset}
+  \small
+  \begin{tabular}{ll}
+    \toprule
+    \textbf{属性} & \textbf{详情} \\
+    \midrule
+    精炼提示数 & 44,600 \\
+    问答对总数 & 265,000 \\
+    偏好对数 & 166,800 \\
+    危害类别数 & 19（侮辱、不道德、犯罪、隐私侵犯等）\\
+    严重程度级别 & 3（轻微、中等、严重）\\
+    30K 子集 & 29,863 条（最广泛使用的基准版本）\\
+    标注类型 & 双维独立标注（有用性 + 安全性）\\
+    基础模型 & Llama 系列 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent\textbf{双维独立标注的意义：}PKU-SafeRLHF 对每个样本分别标注有用
+性排序和安全性排序，使得同一对回复可能在有用性维度上 A > B，而在安全性维
+度上 B > A，这种解耦设计为多目标对齐研究提供了精细化的训练信号。
+
+\subsection{BeaverTails 与 Beaver-Cost Judge}
+
+BeaverTails 数据集~\cite{ji2023beavertails}（NeurIPS 2023）包含 333,963 条
+问答对（安全元标签）和 361,903 条专家对比偏好对，采用 CC BY-NC 4.0 许可。
+在此数据集上训练的 \textbf{Beaver-Cost Model} 被广泛用于评测安全对齐方法
+的有效性，提供连续的安全性度量 $c(x,y)\in\mathbb{R}$（分值越低越不安全）。
+
+\subsection{MD-Judge}
+
+MD-Judge（Multi-Dimensional Judge）是基于 Mistral-7B 微调的多维度安全评估
+框架，通过多粒度安全标准对回复进行综合判断，可区分不同类型的安全违规行为，
+为理解模型安全行为模式提供更丰富的诊断信息。
+
+\subsection{有用性评测框架}
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{MT-Bench}~\cite{zheng2023mtbench}：Zheng 等人（2023）提出的
+    多轮对话评测基准（NeurIPS 2023 / ICLR 2025），8 个类别 80 道双轮问题，
+    GPT-4 作裁判与人类偏好一致率高达 \textbf{85\%}。
+  \item \textbf{WinRate}：以 GPT-4 等强模型作为裁判，对两个模型在相同提示下
+    的回复进行成对比较，以胜率衡量相对有用性。
+  \item \textbf{TruthfulQA}~\cite{lin2022truthfulqa}：817 道问题（38 类别），
+    模型最优准确率约 58\%，而人类达 94\%；重要发现：\textbf{更大的模型反而
+    更不诚实}。
+  \item \textbf{HarmBench}：标准化红队测试框架，覆盖 CBRN 威胁、网络攻击、
+    非法活动等多个危害类别。
+\end{itemize}
+
+%==============================================================================%
+\section{Token 级别方法与序列级别方法的对比}
+%==============================================================================%
+
+\subsection{序列级方法的局限性}
+
+现有主流对齐方法（DPO、SACPO、SafeDPO、BFPO）均以完整回复为基本优化单元，
+属于\textbf{序列级（Sequence-Level）}方法，存在以下固有局限性：
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{稀疏奖励与信用分配困难}：序列级奖励信号在整个生成序列完成后
+    才能获得，无法判断哪些具体 token 的生成对最终的安全/有用性分数负责。
+  \item \textbf{局部安全违规的遗漏}：一段整体上被判为"安全"的回复中可能包
+    含局部有问题的表达，序列级方法无法对这类局部违规施加精准惩罚。
+  \item \textbf{多样性损失}：DPO 等方法的序列级 KL 约束可能导致模型过度保
+    守，降低输出多样性。
+  \item \textbf{对抗性越狱的脆弱性}：序列级安全对齐容易被针对特定 token
+    位置的对抗性后缀攻击（如 GCG 攻击~\cite{zou2023gcg}）绕过。
+\end{enumerate}
+
+\subsection{Token 级 DPO（TDPO）的技术框架}
+
+TDPO~\cite{zeng2024tdpo}（ICML 2024）将 DPO 的优化目标从序列级扩展至
+token 级，为每个生成 token $t$ 引入前向 KL 散度约束：
+
+\begin{equation}
+  \mathcal{L}_{\mathrm{TDPO}}
+    = -\E\!\left[\log\sigmoid\!\left(
+        \sum_{t=1}^T\beta\log\frac{\pitheta(y_t^w|\cdot)}{\piref(y_t^w|\cdot)}
+        - \sum_{t=1}^T\beta\log\frac{\pitheta(y_t^l|\cdot)}{\piref(y_t^l|\cdot)}
+        - \alpha\sum_{t=1}^T\mathbb{KL}_t
+      \right)\right]
+  \label{eq:tdpo}
+\end{equation}
+
+其中 $\mathbb{KL}_t = D_{\mathrm{KL}}[\pitheta(\cdot|x,y_{<t})\,\|\,
+\piref(\cdot|x,y_{<t})]$ 为第 $t$ 步的 token 级 KL 散度。
+
+\subsection{细粒度奖励与 Token 级信用分配}
+
+Wu 等人（NeurIPS 2023）的细粒度 RLHF~\cite{wu2023finegrained} 直接在短语
+级别标注错误类型，并训练独立的细粒度奖励模型，为每个子序列提供密集奖励信
+号。这一工作证明了细粒度奖励对提升 RLHF 训练效率的显著价值。
+
+\subsection{Token 级安全数据选择}
+
+Token-level Safety Data Selection~\cite{tokensafety2025}（arXiv:2603.01185）
+通过 token 粒度识别并移除有害 token，同时保留任务相关信息，在精细微调场景
+下取得了优于句子级别过滤方法的安全性保持效果。
+
+\subsection{TLBSB：Token 级偏置感知语义屏障}
+
+TLBSB（Token-Level Bias-aware Semantic Barrier）提出在 token 级别引入语义
+感知的安全屏障机制。其核心洞察在于：语言模型生成有害内容的根本原因在于
+token 级概率分布中的\textbf{安全偏置（Safety Bias）}——某些 token 在特定
+语义上下文中的条件概率被错误地估计过高。TLBSB 将屏障函数约束与 token 级
+语义相似度度量相结合，在每个生成步骤对可能引发安全违规的 token 的概率进行
+主动修正，实现了比序列级方法更精准、更鲁棒的安全控制。
+
+Token 级 vs.\ 序列级方法的系统对比见表~\ref{tab:token_vs_seq}。
+
+\begin{table}[H]
+  \centering
+  \caption{Token 级方法 vs.\ 序列级方法对比}
+  \label{tab:token_vs_seq}
+  \small
+  \begin{tabular}{lcc}
+    \toprule
+    \textbf{维度} & \textbf{序列级方法（DPO/SafeDPO/BFPO）} & \textbf{Token 级方法（TDPO/TLBSB）} \\
+    \midrule
+    信用分配 & 稀疏（序列末尾） & 密集（每步） \\
+    局部违规检测 & 困难 & 容易 \\
+    对抗鲁棒性 & 较弱 & 较强 \\
+    计算复杂度 & 低 & 较高 \\
+    多样性保持 & 一般 & 更好 \\
+    实现复杂度 & 低 & 中等 \\
+    理论保证 & Bradley-Terry & KL 散度约束 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+%==============================================================================%
+\section{帕累托优化视角下的安全-有用性权衡}
+%==============================================================================%
+
+\subsection{安全-有用性权衡的数学形式化}
+
+在多目标优化框架下，安全对齐问题可以表述为：
+
+\begin{equation}
+  \text{Pareto frontier:}\quad
+  \left\{(\mathrm{Safety}(\pi),\,\mathrm{Helpfulness}(\pi)) : \pi\in\Pi\right\}
+\end{equation}
+
+一个关键理论结论（NeurIPS 2024）：安全约束对有用性的影响并非线性，在约束
+强度较小时有用性代价可忽略，但超过临界点后有用性以\textbf{二次方速率}下
+降，而安全性仅以\textbf{线性速率}提升。这解释了过度安全化模型会产生明显
+"有用性税"的现象。
+
+\subsection{各方法的帕累托性能比较}
+
+在 PKU-SafeRLHF-30K 数据集上，以 Alpaca-7B-reproduced 为基础模型，主要方
+法的帕累托性能如表~\ref{tab:pareto} 所示。
+
+\begin{table}[H]
+  \centering
+  \caption{各安全对齐方法帕累托性能对比（PKU-SafeRLHF-30K，Alpaca-7B）}
+  \label{tab:pareto}
+  \small
+  \begin{tabular}{lcccc}
+    \toprule
+    \textbf{方法} & \textbf{期刊/会议} & \textbf{安全机制} &
+      \textbf{Beaver-Cost↑} & \textbf{WinRate↑} \\
+    \midrule
+    DPO~\cite{rafailov2023dpo} & NeurIPS 2023 & 无 & 基线 & 基线 \\
+    SACPO~\cite{sacpo2024} & NeurIPS 2024 & 两阶段解耦 & $++$ & $+$ \\
+    SafeDPO~\cite{safedpo2026} & ICLR 2026 Oral & 变换T + $\Delta=5$ & $+++$ & $+$ \\
+    BFPO~\cite{bfpo2025} & ICLR 2025 Spotlight & 双因子平方误差 & $+++$ & $+$ \\
+    TLBSB & 本文 & Token 级语义屏障 & $++++$ & $++$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{多目标对齐的算法研究进展}
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{MOCAN}：通过可微的多目标帕累托优化，在训练时同时最大化多个
+    对齐目标，自动搜索帕累托最优策略。
+  \item \textbf{GAPO（Gradient Adaptive Pareto Optimization）}：引入自适应
+    梯度缩放机制，在每步更新中动态调整各目标的梯度权重，引导优化轨迹向帕
+    累托边界收敛。
+  \item \textbf{CAT-DPO}~\cite{catdpo2026}（arXiv:2604.17299）：为每个危害类别
+    分配独立自适应安全边距，边距在类别仍不安全时收紧，在类别表现改善后放
+    松，有效解决了单一全局边距导致的类别不平衡问题。
+\end{itemize}
+
+%==============================================================================%
+\section{当前挑战与未来方向}
+%==============================================================================%
+
+\subsection{泛化性挑战}
+
+当前安全偏好优化方法的主流实验设置以 Alpaca-7B-reproduced 为基础模型，在
+PKU-SafeRLHF-30K 数据集上训练和评测。然而，这一设置与实际部署场景之间存
+在显著的规模和分布差距：
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{规模泛化}：安全对齐方法的有效性是否随规模单调增长尚无定论
+    ——有研究表明更大的模型在某些安全场景下反而更难对齐。
+  \item \textbf{分布偏移}：PKU-SafeRLHF 的危害类别覆盖度有限，对于英语、
+    多语言或专业领域（医学、法律、代码安全）的安全性泛化能力尚待评测。
+  \item \textbf{长上下文挑战}：随着模型上下文窗口扩展至 128K 乃至 1M
+    tokens，序列级安全对齐面临更严峻的稀疏奖励问题。
+\end{itemize}
+
+\subsection{评测基准的可靠性问题}
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{评测污染}：Beaver-Cost Model 与 PKU-SafeRLHF 的数据同源性
+    使得评测结果可能过于乐观。
+  \item \textbf{LLM-as-Judge 的偏见}：GPT-4 更偏好与自身风格相近的回复，
+    使得使用 GPT-4 类数据训练的模型在 WinRate 上占优但不一定反映真实人类
+    偏好~\cite{zheng2023mtbench}。
+  \item \textbf{静态评测的脆弱性}：固定基准在发布后会迅速被针对性优化，
+    形成"评测-逃逸-更新"的军备竞赛循环。
+\end{itemize}
+
+\subsection{对抗鲁棒性}
+
+越狱攻击（Jailbreak Attack）是安全对齐方法面临的最直接对抗性威胁。GCG 攻
+击~\cite{zou2023gcg} 通过基于梯度的 token 级搜索生成对抗性后缀，可以绕过
+绝大多数现有安全对齐方法；PAIR 等黑盒方法无需访问模型梯度，通过 LLM 生成
+的语义级提示重写实现越狱，攻击成功率在部分模型上高达 90\% 以上。对于
+token 级安全方法，对抗鲁棒性是其相对序列级方法的重要优势来源——如何建立
+在自适应对抗假设下仍然有效的理论安全保证，是最重要的开放问题之一。
+
+\subsection{RLHF 的可扩展性与计算效率}
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{在线 vs.\ 离线对齐}：DPO 是典型的离线方法；在线方法（PPO
+    based RLHF）原则上可以规避分布外泛化问题，但计算成本高出一个数量级。
+  \item \textbf{迭代 DPO}：结合在线采样与 DPO 更新的混合方案（Online DPO、
+    Iterative DPO）正成为兼顾效率与性能的折中选择。
+  \item \textbf{PEFT 的影响}：LoRA 等低秩适配方法大幅降低了安全对齐的显存
+    需求，但 LoRA 的低秩约束是否会限制安全相关行为的表达能力尚存争议。
+\end{itemize}
+
+\subsection{超越静态偏好：动态和个性化对齐}
+
+安全规范是文化相对的、上下文依赖的、动态演化的。Janus~\cite{janus2024}
+（NeurIPS 2024）通过系统提示泛化方式，使单一模型适配多样化的安全规范，无
+需为每种场景重新训练，代表了个性化安全对齐的重要探索方向。
+
+\subsection{理论基础的完善需求}
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{收敛保证}：DPO 的离策略训练缺乏对全局收敛的理论保证，
+    训练结果高度依赖偏好数据分布。
+  \item \textbf{统计效率}：在有限偏好样本下，各方法的样本复杂度界尚未得
+    到充分分析。
+  \item \textbf{组合安全性}：多个对齐目标的组合优化是否保持各单目标的安
+    全保证缺乏理论支撑。
+\end{itemize}
+
+%==============================================================================%
+\section{结论}
+%==============================================================================%
+
+本文系统综述了基于人类反馈的强化学习（RLHF）与安全偏好优化领域的核心研究
+进展，沿"RLHF 基础 $\to$ DPO 变体谱系 $\to$ 安全偏好优化 $\to$ Token
+级方法 $\to$ 帕累托优化"的逻辑主线，对 InstructGPT、Constitutional AI、
+DPO、IPO、KTO、SafeDPO、BFPO、SACPO 等代表性方法进行了深入的技术分析。
+
+从算法演进的角度看，该领域经历了从\textbf{多阶段 PPO} 到\textbf{单阶段
+DPO} 的效率革命，再到\textbf{安全感知偏好优化}的正确性革命，当前正向
+\textbf{Token 级精细控制}方向演进。每一次范式转变都源于对前一代方法核心
+局限性的深刻理解：
+\begin{itemize}[leftmargin=2em]
+  \item PPO 的计算开销 $\to$ DPO
+  \item DPO 的安全盲区 $\to$ SafeDPO / BFPO / SACPO
+  \item 序列级方法的信用分配困难 $\to$ TDPO 及 TLBSB 等 token 级方法
+\end{itemize}
+
+TLBSB 所代表的 token 级偏置感知语义屏障方向，将屏障函数约束与 token 级语
+义相似度度量相结合，相比序列级基线方法理论上可以提供更精准的安全控制与更
+强的对抗鲁棒性。与 SafeDPO 和 BFPO 的实验对比将揭示 token 级方法相对序列
+级方法的实质性优势范围和局限条件，为安全对齐研究提供新的参照点。
+
+%==============================================================================%
+% 参考文献
+%==============================================================================%
+\newpage
+\bibliographystyle{unsrt}
+\begin{thebibliography}{99}
+
+\bibitem{ouyang2022instructgpt}
+L.~Ouyang, J.~Wu, X.~Jiang, et al.,
+``Training language models to follow instructions with human feedback,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2022. arXiv:2203.02155.
+
+\bibitem{bai2022constitutional}
+Y.~Bai, A.~Jones, K.~Ndousse, et al.,
+``Constitutional AI: Harmlessness from AI feedback,''
+\textit{Anthropic Technical Report},
+2022. arXiv:2212.08073.
+
+\bibitem{gao2023scaling}
+L.~Gao, J.~Schulman, and J.~Hilton,
+``Scaling laws for reward model overoptimization,''
+\textit{International Conference on Machine Learning (ICML)},
+2023. arXiv:2210.10760.
+
+\bibitem{ziegler2019finetuning}
+D.~M.~Ziegler, N.~Stiennon, J.~Wu, et al.,
+``Fine-tuning language models from human preferences,''
+2019. arXiv:1909.08593.
+
+\bibitem{stiennon2020learning}
+N.~Stiennon, L.~Ouyang, J.~Wu, et al.,
+``Learning to summarize from human feedback,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2020. arXiv:2009.01325.
+
+\bibitem{schulman2017ppo}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov,
+``Proximal policy optimization algorithms,''
+2017. arXiv:1707.06347.
+
+\bibitem{rafailov2023dpo}
+R.~Rafailov, A.~Sharma, E.~Mitchell, et al.,
+``Direct preference optimization: Your language model is secretly a reward model,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2023. arXiv:2305.18290.
+
+\bibitem{azar2024ipo}
+M.~G.~Azar, M.~Rowland, B.~Piot, et al.,
+``A general theoretical paradigm to understand learning from human feedback,''
+\textit{International Conference on Artificial Intelligence and Statistics (AISTATS)},
+2024. arXiv:2310.12036.
+
+\bibitem{ethayarajh2024kto}
+K.~Ethayarajh, W.~Xu, N.~Muennighoff, D.~Jurafsky, and D.~Kiela,
+``KTO: Model alignment as prospect theoretic optimization,''
+\textit{International Conference on Machine Learning (ICML)},
+2024. arXiv:2402.01306.
+
+\bibitem{meng2024simpo}
+Y.~Meng, M.~Xia, and D.~Chen,
+``SimPO: Simple preference optimization with a reference-free reward,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2024. arXiv:2405.14734.
+
+\bibitem{hong2024orpo}
+J.~Hong, N.~Lee, and J.~Thorne,
+``ORPO: Monolithic preference optimization without reference model,''
+\textit{Empirical Methods in Natural Language Processing (EMNLP)},
+2024. arXiv:2403.07691.
+
+\bibitem{zhao2023slic}
+Y.~Zhao, R.~Joshi, T.~Liu, M.~Khalman, M.~Saleh, and P.~J.~Liu,
+``SLiC-HF: Sequence likelihood calibration with human feedback,''
+\textit{International Conference on Learning Representations (ICLR)},
+2023. arXiv:2305.10425.
+
+\bibitem{song2024pro}
+F.~Song, B.~Yu, M.~Li, et al.,
+``Preference ranking optimization for human alignment,''
+\textit{AAAI Conference on Artificial Intelligence (AAAI)},
+2024. arXiv:2306.17492.
+
+\bibitem{wang2024fdpo}
+C.~Wang, Y.~Jiang, C.~Yang, H.~Liu, and Y.~Chen,
+``Beyond reverse KL: Generalizing direct preference optimization with diverse divergence constraints,''
+\textit{International Conference on Learning Representations (ICLR)},
+2024. arXiv:2309.16240.
+
+\bibitem{liu2024rso}
+T.~Liu, Y.~Zhao, R.~Joshi, et al.,
+``Statistical rejection sampling improves preference optimization,''
+\textit{International Conference on Learning Representations (ICLR)},
+2024. arXiv:2309.06657.
+
+\bibitem{zeng2024tdpo}
+Z.~Zeng, C.~Liu, Z.~Chen, et al.,
+``Token-level direct preference optimization,''
+\textit{International Conference on Machine Learning (ICML)},
+2024. arXiv:2404.11999.
+
+\bibitem{dai2023saferlhf}
+J.~Dai, X.~Pan, R.~Sun, et al.,
+``Safe RLHF: Safe reinforcement learning from human feedback,''
+\textit{International Conference on Learning Representations (ICLR)},
+2024. arXiv:2310.12773.
+
+\bibitem{sacpo2024}
+R.~Yamada et al.,
+``SACPO: Stepwise alignment for constrained language model policy optimization,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2024. \url{https://github.com/line/sacpo}.
+
+\bibitem{safedpo2026}
+D.~Kim et al.,
+``SafeDPO: A simple approach to direct preference optimization with enhanced safety,''
+\textit{International Conference on Learning Representations (ICLR)}, Oral,
+2026. arXiv:2505.20065.
+
+\bibitem{bfpo2025}
+W.~Zhang et al.,
+``Bi-factorial preference optimization: Balancing safety-helpfulness in language models,''
+\textit{International Conference on Learning Representations (ICLR)}, Spotlight,
+2025. arXiv:2408.15313. \url{https://github.com/wx-zhang/bfpo}.
+
+\bibitem{ji2024pkusaferlhf}
+J.~Ji, M.~Liu, J.~Dai, et al.,
+``PKU-SafeRLHF: A multi-level safety alignment dataset for large language models,''
+\textit{Annual Meeting of the Association for Computational Linguistics (ACL)},
+2025. arXiv:2406.15513.
+
+\bibitem{ji2023beavertails}
+J.~Ji, M.~Liu, J.~Dai, et al.,
+``BeaverTails: Towards improved safety alignment of LLM via a human-preference dataset,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2023. arXiv:2307.04657.
+
+\bibitem{zheng2023mtbench}
+L.~Zheng, W.-L.~Chiang, Y.~Sheng, et al.,
+``Judging LLM-as-a-judge with MT-bench and chatbot arena,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2023. arXiv:2306.05685.
+
+\bibitem{lin2022truthfulqa}
+S.~Lin, J.~Hilton, and O.~Evans,
+``TruthfulQA: Measuring how models mimic human falsehoods,''
+\textit{Annual Meeting of the Association for Computational Linguistics (ACL)},
+2022. arXiv:2109.07958.
+
+\bibitem{wu2023finegrained}
+Z.~Wu, Y.~Hu, W.~Shi, et al.,
+``Fine-grained human feedback gives better rewards for language model training,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2023. arXiv:2306.01693.
+
+\bibitem{tokensafety2025}
+``Token-level data selection for safe LLM fine-tuning,''
+2025. arXiv:2603.01185.
+
+\bibitem{zou2023gcg}
+A.~Zou, Z.~Wang, J.~Z.~Kolter, and M.~Fredrikson,
+``Universal and transferable adversarial attacks on aligned language models,''
+2023. arXiv:2307.15043.
+
+\bibitem{touvron2023llama2}
+H.~Touvron, L.~Martin, K.~Stone, et al.,
+``Llama 2: Open foundation and fine-tuned chat models,''
+2023. arXiv:2307.09288.
+
+\bibitem{janus2024}
+S.~Lee et al.,
+``Aligning to thousands of preferences via system message generalization,''
+\textit{Advances in Neural Information Processing Systems (NeurIPS)},
+2024. arXiv:2405.17977.
+
+\bibitem{catdpo2026}
+``CAT-DPO: Category-adaptive safety alignment via direct preference optimization,''
+2026. arXiv:2604.17299.
+
+\bibitem{cui2023csaclb}
+Z.~Cui et al.,
+``Constrained reinforcement learning with smoothed log barrier function,''
+2023. arXiv:2403.14508.
+
+\bibitem{coste2023ensemble}
+T.~Coste, U.~Anwar, R.~Kirk, and D.~Krueger,
+``Reward model ensembles help mitigate overoptimization,''
+2023. arXiv:2310.02743.
+
+\bibitem{kaufmann2023survey}
+T.~Kaufmann, P.~Weng, V.~Bengs, and E.~H\"{u}llermeier,
+``A survey of reinforcement learning from human feedback,''
+2023. arXiv:2312.14925.
+
+\end{thebibliography}
+
+%==============================================================================%
+\end{document}
+%==============================================================================%
