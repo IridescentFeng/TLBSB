@@ -6,8 +6,9 @@ with Alpaca-7B-reproduced, matching the SACPO/TLBSB experimental setup.
 
 Key: squared-error loss with a safety-aware target determined by
      is_chosen_safe / is_rejected_safe labels per sample.
-     Loss = (logits - safe_factor / beta) ** 2
-     where safe_factor = b1*b3*is_chosen_safe - b3*is_rejected_safe - alpha
+     Loss = (logits - safe_factor) ** 2
+     where logits   = beta * (delta_logp_chosen - delta_logp_rejected)
+           safe_factor = b1*b3*is_chosen_safe - b3*is_rejected_safe - alpha
 
 Usage:
     python train_bfpo.py \
@@ -122,7 +123,8 @@ class BFPOTrainer(DPOTrainer):
     """
     Extends TRL's DPOTrainer with the BFPO squared-error loss.
 
-    Loss = (logits - safe_factor / beta) ** 2
+    Loss = (logits - safe_factor) ** 2
+    logits      = beta * (delta_logp_chosen - delta_logp_rejected)
     safe_factor = b1*b3 * is_chosen_safe - b3 * is_rejected_safe - alpha
     b3 = 1 / (b1 - 1)
     """
