@@ -24,6 +24,9 @@ METHODS = {
     "SACPO_StoM":     "/home/zjq/FZ2026/sacpo-main/output/PKU_Baseline_Safety_to_Mixed/eval_results",
     "Helpful_baseline": "/home/zjq/FZ2026/sacpo-main/output/30K_helpful_dpo_safety/helpful_baseline_results",
     "Safety_baseline":  "/home/zjq/FZ2026/sacpo-main/output/30K_safety_dpo_helpful/safety_baseline_results",
+    # Single-stage joint baselines. Verify the eval subdir name on the machine.
+    "SafeDPO":          "/home/zjq/FZ2026/sacpo-main/output/SafeDPO_delta5/eval_results",
+    "BFPO":             "/home/zjq/FZ2026/sacpo-main/output/BFPO_b1-3_alpha-0.5/eval_results",
 }
 
 
