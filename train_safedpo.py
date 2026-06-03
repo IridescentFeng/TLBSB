@@ -20,14 +20,15 @@ Requires: transformers, trl>=0.7, peft, bitsandbytes, datasets
 """
 
 import argparse
+import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
-from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForCausalLM,
@@ -49,33 +50,53 @@ ALPACA_TEMPLATE = (
 
 # ── SafeDPO data transformation ───────────────────────────────────────────────
 
+def _parse_safe_flag(val) -> bool:
+    """Robustly parse is_response_X_safe: handles bool, int, str."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, int):
+        return val != 0
+    if isinstance(val, str):
+        return val.strip().lower() in ("true", "1", "yes")
+    return bool(val)
+
+
 def apply_transformation_T(example):
     """
     SafeDPO transformation T (Section 3.2 of Kim et al., ICLR 2026).
 
-    Conventions in PKU-SafeRLHF:
-      better_response_id : int  (0 or 1) — more helpful response
-      is_response_0_safe : bool
-      is_response_1_safe : bool
-
-    SafeDPO h indicator: h=1 means UNSAFE (cost > 0).
+    Supports two common field layouts for PKU-SafeRLHF JSONL files:
+      Layout A (HF / SACPO-style):
+        better_response_id, response_0, response_1,
+        is_response_0_safe, is_response_1_safe, prompt
+      Layout B (chosen/rejected pre-split):
+        chosen, rejected, prompt  (no safety fields → treated as safe/safe)
 
     Returns dict with chosen/rejected/h_rejected, or None if both unsafe.
     """
-    bid = int(example["better_response_id"])          # helpfulness winner
+    # ── Layout B: already split into chosen/rejected, no safety fields ──────
+    if "chosen" in example and "better_response_id" not in example:
+        prompt = ALPACA_TEMPLATE.format(instruction=example["prompt"])
+        return {
+            "prompt": prompt,
+            "chosen": example["chosen"],
+            "rejected": example["rejected"],
+            "h_rejected": 0,
+        }
+
+    # ── Layout A: standard PKU-SafeRLHF fields ───────────────────────────────
+    bid = int(example["better_response_id"])
     lid = 1 - bid
 
     y_w = example[f"response_{bid}"]
     y_l = example[f"response_{lid}"]
 
-    # h=1 → unsafe
-    h_w = 0 if example[f"is_response_{bid}_safe"] else 1
-    h_l = 0 if example[f"is_response_{lid}_safe"] else 1
+    h_w = 0 if _parse_safe_flag(example[f"is_response_{bid}_safe"]) else 1
+    h_l = 0 if _parse_safe_flag(example[f"is_response_{lid}_safe"]) else 1
 
     prompt = ALPACA_TEMPLATE.format(instruction=example["prompt"])
 
     if h_w == 0:
-        # preferred is safe → keep
         return {"prompt": prompt, "chosen": y_w, "rejected": y_l,
                 "h_rejected": h_l}
     elif h_w == 1 and h_l == 0:
@@ -83,40 +104,78 @@ def apply_transformation_T(example):
         return {"prompt": prompt, "chosen": y_l, "rejected": y_w,
                 "h_rejected": 1}
     else:
-        # both unsafe → discard (return None handled below)
+        # both unsafe → discard
         return None
 
 
-def build_safedpo_dataset(split="train"):
-    """Load PKU-SafeRLHF-30K and apply transformation T."""
-    logger.info("Loading PKU-SafeRLHF-30K (%s)…", split)
-    ds = load_dataset("PKU-Alignment/PKU-SafeRLHF-30K", split=split)
+def _load_jsonl(path: Path) -> List[dict]:
+    examples = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                examples.append(json.loads(line))
+    return examples
+
+
+def build_safedpo_dataset(data_dir: str, filenames: Optional[List[str]] = None):
+    """
+    Load preference pairs from local JSONL files and apply transformation T.
+
+    data_dir   : directory containing the JSONL files
+    filenames  : list of filenames to load (default: pku_helpful.jsonl + pku_safety.jsonl)
+    """
+    data_dir = Path(data_dir)
+    if filenames is None:
+        filenames = ["pku_helpful.jsonl", "pku_safety.jsonl"]
+
+    raw = []
+    for fname in filenames:
+        fpath = data_dir / fname
+        if not fpath.exists():
+            logger.warning("Data file not found, skipping: %s", fpath)
+            continue
+        loaded = _load_jsonl(fpath)
+        logger.info("Loaded %d examples from %s", len(loaded), fpath)
+        raw.extend(loaded)
+
+    if not raw:
+        raise FileNotFoundError(
+            f"No data loaded from {data_dir}. "
+            "Check --data_dir and --data_files."
+        )
 
     transformed = []
     n_kept = n_swapped = n_discarded = 0
-    for ex in ds:
-        bid = int(ex["better_response_id"])
-        lid = 1 - bid
-        h_w = 0 if ex[f"is_response_{bid}_safe"] else 1
-        h_l = 0 if ex[f"is_response_{lid}_safe"] else 1
-
-        if h_w == 1 and h_l == 1:
-            n_discarded += 1
-            continue
+    for ex in raw:
+        # Pre-check for both-unsafe in Layout A
+        if "better_response_id" in ex:
+            bid = int(ex["better_response_id"])
+            lid = 1 - bid
+            h_w = 0 if _parse_safe_flag(ex[f"is_response_{bid}_safe"]) else 1
+            h_l = 0 if _parse_safe_flag(ex[f"is_response_{lid}_safe"]) else 1
+            if h_w == 1 and h_l == 1:
+                n_discarded += 1
+                continue
+            is_swap = (h_w == 1 and h_l == 0)
+        else:
+            is_swap = False
 
         result = apply_transformation_T(ex)
         if result is None:
             n_discarded += 1
             continue
 
-        if h_w == 1 and h_l == 0:
+        if is_swap:
             n_swapped += 1
         else:
             n_kept += 1
         transformed.append(result)
 
-    logger.info("Dataset after T: kept=%d  swapped=%d  discarded=%d  total=%d",
-                n_kept, n_swapped, n_discarded, len(transformed))
+    logger.info(
+        "Dataset after T: kept=%d  swapped=%d  discarded=%d  total=%d",
+        n_kept, n_swapped, n_discarded, len(transformed),
+    )
 
     from datasets import Dataset
     return Dataset.from_list(transformed)
@@ -190,8 +249,16 @@ class SafeDPOCollator(DPODataCollatorWithPadding):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--model_path", required=True,
-                   help="Path or HF repo of Alpaca-7B-reproduced")
+                   help="Local path to alpaca-7b (or alpaca-7b-reproduced)")
     p.add_argument("--output_dir", default="./output/SafeDPO")
+    # ── Data ─────────────────────────────────────────────────────────────────
+    p.add_argument("--data_dir",
+                   default="/home/zjq/FZ2026/sacpo-main/data",
+                   help="Directory containing the training JSONL files")
+    p.add_argument("--data_files", nargs="+",
+                   default=["pku_helpful.jsonl", "pku_safety.jsonl"],
+                   help="JSONL filenames inside data_dir to use for training")
+    # ── SafeDPO hypers ────────────────────────────────────────────────────────
     p.add_argument("--safety_margin", type=float, default=5.0,
                    help="SafeDPO Δ parameter (0 = no margin)")
     p.add_argument("--beta", type=float, default=0.1,
@@ -261,7 +328,7 @@ def main():
     )
 
     # ── dataset ───────────────────────────────────────────────────────────────
-    train_ds = build_safedpo_dataset("train")
+    train_ds = build_safedpo_dataset(args.data_dir, args.data_files)
 
     # ── training args ─────────────────────────────────────────────────────────
     training_args = TrainingArguments(

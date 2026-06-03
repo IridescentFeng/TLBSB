@@ -4,15 +4,21 @@
 
 set -e
 
-MODEL_PATH="/home/zjq/FZ2026/BSB-TDPO/alpaca-7b-reproduced"
-# Fallback: PKU-Alignment/alpaca-7b-reproduced (HF Hub)
+MODEL_PATH="/home/zjq/FZ2026/sacpo-main/alpaca-7b"
+# If your model folder is named differently, update the line above.
+# Common alternatives:
+#   /home/zjq/FZ2026/BSB-TDPO/alpaca-7b-reproduced
+#   /home/zjq/FZ2026/BSB-TDPO/alpaca-7b
 
+DATA_DIR="/home/zjq/FZ2026/sacpo-main/data"
 OUTPUT_BASE="/home/zjq/FZ2026/sacpo-main/output"
 SCRIPT="$(dirname "$0")/train_safedpo.py"
 
 # ── SafeDPO with Δ=5 (recommended in paper) ──────────────────────────────────
 python "$SCRIPT" \
     --model_path "$MODEL_PATH" \
+    --data_dir "$DATA_DIR" \
+    --data_files pku_helpful.jsonl pku_safety.jsonl \
     --output_dir "${OUTPUT_BASE}/SafeDPO_delta5" \
     --safety_margin 5.0 \
     --beta 0.1 \
