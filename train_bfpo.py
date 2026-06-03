@@ -167,7 +167,9 @@ class BFPOTrainer(DPOTrainer):
         else:
             safe_factor = -self.alpha  # fallback: treat as unknown-safe pair
 
-        target = safe_factor / self.beta
+        # target lives in the same β·Δlogp space as logits;
+        # dividing by β would require Δlogp ≈ safe_factor/β² ≈ 50–100 nats (unachievable)
+        target = safe_factor
         losses = (logits - target) ** 2
 
         return losses, chosen_rewards.detach(), rejected_rewards.detach()
@@ -215,9 +217,9 @@ def parse_args():
     p.add_argument("--num_train_epochs", type=int, default=1)
     p.add_argument("--per_device_train_batch_size", type=int, default=4)
     p.add_argument("--gradient_accumulation_steps", type=int, default=4)
-    p.add_argument("--learning_rate", type=float, default=5e-4)
+    p.add_argument("--learning_rate", type=float, default=1e-4)
     p.add_argument("--max_length", type=int, default=512)
-    p.add_argument("--max_prompt_length", type=int, default=256)
+    p.add_argument("--max_prompt_length", type=int, default=128)
     p.add_argument("--lora_r", type=int, default=64)
     p.add_argument("--lora_alpha", type=int, default=16)
     p.add_argument("--load_in_4bit", action="store_true", default=True)

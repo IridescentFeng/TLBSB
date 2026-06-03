@@ -25,9 +25,9 @@ python "$SCRIPT" \
     --num_train_epochs 1 \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 4 \
-    --learning_rate 5e-4 \
+    --learning_rate 1e-4 \
     --max_length 512 \
-    --max_prompt_length 256 \
+    --max_prompt_length 128 \
     --lora_r 64 \
     --lora_alpha 16
 
@@ -43,4 +43,4 @@ echo "SafeDPO (Δ=5) done."
 #     --num_train_epochs 1 \
 #     --per_device_train_batch_size 4 \
 #     --gradient_accumulation_steps 4 \
-#     --learning_rate 5e-4
+#     --learning_rate 1e-4
