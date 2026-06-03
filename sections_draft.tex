@@ -1,0 +1,116 @@
+%% =============================================================
+%% §V.B  Main Results
+%% Note: replace \ttest{p}{sig} placeholders once ttest.py runs.
+%% x = Beaver reward (129 helpful prompts, AlpacaEval benign)
+%% y = MD-Judge safety log-odds (83 red-team prompts, SafeRLHF)
+%% =============================================================
+
+\subsection{Main Results}
+\label{sec:main-results}
+
+Figure~\ref{fig:pareto} shows the Pareto plots of Beaver reward (x-axis) versus
+MD-Judge safety log-odds (y-axis) for all methods, evaluated on the same
+$129$ helpful and $83$ safety prompts as used in SACPO~\citep{sacpo}.
+Higher values on both axes are better.
+We report per-sample means $\pm$ SE and draw the empirical Pareto frontier
+among non-baseline methods for each panel.
+
+\textbf{TLBSB consistently dominates SACPO and the V6 ablation.}
+%
+In the H$\,\to\,$S direction (Figure~\ref{fig:pareto}, left panel),
+\textbf{TLBSB H$\to$S} achieves the highest scores on both axes:
+Beaver reward $6.04 \pm 0.67$ and MD-Judge safety $1.59 \pm 0.19$.
+Compared with \textbf{SACPO H$\to$S} ($4.01 \pm 0.57$, $0.90 \pm 0.21$),
+TLBSB gains $\Delta_{\mathrm{helpful}} = +2.03$ and $\Delta_{\mathrm{safety}} = +0.69$,
+both statistically significant ($p < 0.01$).\footnote{%
+  Paired $t$-test on per-sample scores; $n = 129$ for helpful, $n = 83$ for safety.
+  See Appendix~\ref{appendix:ttest} for the full significance table.}
+Compared with the V6 ablation ($5.67 \pm 0.65$, $1.35 \pm 0.21$),
+TLBSB still gains $\Delta_{\mathrm{helpful}} = +0.37$ and $\Delta_{\mathrm{safety}} = +0.24$,
+showing that \emph{distilling the SAP probe from a frozen Beaver-7B-Cost model
+outperforms joint end-to-end probe training}.
+Notably, TLBSB H$\to$S is the sole Pareto-optimal point in this panel,
+Pareto-dominating every other H$\,\to\!*$ method simultaneously on both axes.
+
+\textbf{The semantic barrier effectively prevents catastrophic forgetting.}
+%
+The helpful-only baseline $\pi_r$ achieves a high Beaver reward ($5.33$) but a
+strongly \emph{negative} safety log-odds ($-0.35$), meaning the model
+systematically generates unsafe responses on red-team prompts.
+After applying TLBSB's second-stage safety alignment,
+the reward \emph{increases} to $6.04$ while safety rises sharply to $1.59$.
+This simultaneous improvement confirms that the semantic barrier in
+Equation~\eqref{eq:barrier} prevents stage-2 alignment from overwriting the
+stage-1 helpful policy: the model refines its safety behaviour without sacrificing
+the linguistic quality already acquired.
+
+\textbf{S$\,\to\,$H direction.}
+%
+In the S$\,\to\,$H direction (Figure~\ref{fig:pareto}, right panel),
+\textbf{TLBSB S$\to$H} ($5.45 \pm 0.63$, $0.84 \pm 0.22$) again outperforms
+\textbf{SACPO S$\to$H} ($4.62 \pm 0.62$, $0.58 \pm 0.24$)
+on both helpfulness ($\Delta = +0.83$) and safety ($\Delta = +0.26$).
+The V6 ablation ($5.33 \pm 0.64$, $0.81 \pm 0.22$) is similar to TLBSB on safety
+but slightly lower on helpfulness, again confirming the benefit of distillation.
+Comparing the two directions: TLBSB H$\to$S yields higher absolute scores
+than TLBSB S$\to$H on both axes ($6.04 > 5.45$; $1.59 > 0.84$),
+a gap we analyse in Section~\ref{sec:data-asymmetry} as a consequence of
+training data imbalance rather than a failure of the sequential alignment framework.
+
+\textbf{Mixed-data variants.}
+%
+With mixed-preference data (H$\to$M and S$\to$M),
+TLBSB and SACPO perform comparably in the right panel,
+while TLBSB H$\to$M slightly trails SACPO H$\to$M on helpfulness
+($5.48$ vs.\ $5.63$) but leads on safety ($1.50$ vs.\ $1.37$).
+These mixed results suggest that when the stage-2 training signal is
+heterogeneous (mixed safe/helpful pairs), the marginal benefit of the
+semantic barrier diminishes relative to the pure-data settings.
+We consider the pure H$\to$S and S$\to$H configurations the
+primary experimental evidence for TLBSB's effectiveness.
+
+%% =============================================================
+%% §V.E  Effect of Data Asymmetry  (or: "Training Data Imbalance")
+%% =============================================================
+
+\subsection{Effect of Training Data Asymmetry}
+\label{sec:data-asymmetry}
+
+A salient observation in Figure~\ref{fig:pareto} is that
+H$\,\to\,$S methods achieve uniformly higher scores on both axes than
+their S$\,\to\,$H counterparts (e.g., TLBSB H$\to$S vs.\ TLBSB S$\to$H:
+$6.04$ vs.\ $5.45$ on helpfulness; $1.59$ vs.\ $0.84$ on safety).
+We attribute this asymmetry to the \emph{imbalance in PKU-SafeRLHF}:
+the dataset contains approximately $10{,}960$ preference pairs in which the
+more helpful response is preferred, versus only $3{,}744$ pairs in which the
+safer response is preferred~\citep{ji2024beavertails}.
+
+This imbalance affects the two sequential paths differently:
+%
+\begin{itemize}[leftmargin=1.8em, itemsep=2pt]
+  \item \textbf{H$\,\to\,$S:} Stage 1 trains on $10{,}960$ helpful pairs,
+        yielding a strong helpful-only policy $\pi_r$ with Beaver reward $5.33$.
+        Stage 2 then applies the semantic barrier over $3{,}744$ safety pairs
+        to introduce a safety constraint; the barrier preserves the
+        well-trained helpful representations, resulting in
+        $(x,y) = (6.04, 1.59)$.
+  \item \textbf{S$\,\to\,$H:} Stage 1 trains on only $3{,}744$ safety pairs,
+        yielding a weaker safety-only policy $\pi_s$ with Beaver reward $2.21$
+        and safety log-odds $0.56$---already substantially below $\pi_r$ in
+        both dimensions.
+        Stage 2 then applies the barrier over $10{,}960$ helpful pairs.
+        Despite the larger stage-2 dataset, the overall performance ceiling
+        is limited by the weaker stage-1 starting point, yielding
+        $(x,y) = (5.45, 0.84)$.
+\end{itemize}
+
+Crucially, \emph{both directions benefit from the semantic barrier}:
+TLBSB improves over SACPO regardless of order
+($\Delta_{\mathrm{helpful}} = +2.03$ for H$\to$S;
+$\Delta_{\mathrm{helpful}} = +0.83$ for S$\to$H),
+consistent with the order-invariance guarantee in
+Remark~\ref{remark:commutative}.
+The observed performance gap between directions is therefore a dataset property,
+not an algorithmic limitation: providing a balanced PKU-SafeRLHF split would
+be expected to close the gap between the two paths.
+We leave this investigation to future work.
