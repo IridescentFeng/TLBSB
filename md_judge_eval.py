@@ -68,10 +68,8 @@ def run_md_judge_on_file(model, tokenizer, safe_id, unsafe_id, input_file, label
     if not os.path.exists(input_file):
         print(f"  [skip] {input_file} not found")
         return None
-
     with open(input_file, "r", encoding="utf-8") as f:
         data = json.load(f)
-
     scores = []
     for item in tqdm(data, desc=f"MD-Judge [{label}]"):
         prompt = item.get("prompt", "")
@@ -80,26 +78,46 @@ def run_md_judge_on_file(model, tokenizer, safe_id, unsafe_id, input_file, label
             scores.append(0.0)
             continue
         scores.append(get_safety_score(model, tokenizer, prompt, response, safe_id, unsafe_id))
-
     n = len(scores)
     return {
         "safety_logodds": scores,
-        "mean": float(np.mean(scores)),
-        "se":   float(np.std(scores) / np.sqrt(n)),
-        "std":  float(np.std(scores)),
+        "mean":      float(np.mean(scores)),
+        "se":        float(np.std(scores) / np.sqrt(n)),
+        "std":       float(np.std(scores)),
         "safe_rate": float(np.mean([s > 0 for s in scores])),
         "n": n,
     }
 
 
+def load_beaver_helpful(input_dir):
+    """Read Beaver reward scores (x-axis). No contamination: Beaver-Reward was not used in X1 training."""
+    candidates = [
+        os.path.join(input_dir, "helpful_results_beaver_scores.json"),
+        os.path.join(input_dir, "helpful_beaver_scores.json"),
+        os.path.join(input_dir, "helpful_scores.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            rewards = d.get("reward_scores", [])
+            if not rewards:
+                continue
+            mean = d.get("reward_mean", float(np.mean(rewards)))
+            std  = d.get("reward_std",  float(np.std(rewards)))
+            se   = std / np.sqrt(len(rewards))
+            print(f"  [x] Beaver reward: mean={mean:.3f}  SE={se:.3f}  n={len(rewards)}  ({path})")
+            return {"mean": mean, "se": se, "std": std, "n": len(rewards)}
+    print(f"  [warn] No Beaver helpful scores file found in {input_dir}")
+    return None
+
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="MD-Judge evaluator: runs on both helpful and safety response files, "
-                    "outputs per-split scores and a combined Pareto summary.")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", required=True,
-                        help="Directory containing helpful_results.json and safety_results.json")
-    parser.add_argument("--output_dir", default=None,
-                        help="Where to write output files (defaults to input_dir)")
+                        help="Directory with helpful_results.json, safety_results.json, "
+                             "and helpful_results_beaver_scores.json")
+    parser.add_argument("--output_dir", default=None)
     args = parser.parse_args()
 
     out_dir = args.output_dir or args.input_dir
@@ -117,45 +135,41 @@ def main():
     print(f"Token IDs -> safe: {safe_id} ('{tokenizer.decode(safe_id)}')  "
           f"unsafe: {unsafe_id} ('{tokenizer.decode(unsafe_id)}')\n")
 
-    # run MD-Judge on both splits
-    results = {}
-    for split in ["helpful", "safety"]:
-        inp = os.path.join(args.input_dir, f"{split}_results.json")
-        out = os.path.join(out_dir, f"{split}_results_md_scores.json")
-        r = run_md_judge_on_file(model, tokenizer, safe_id, unsafe_id, inp, split)
-        if r is not None:
-            with open(out, "w", encoding="utf-8") as f:
-                json.dump(r, f, ensure_ascii=False, indent=2)
-            print(f"  [{split}] mean={r['mean']:.3f}  SE={r['se']:.3f}"
-                  f"  safe_rate={r['safe_rate']:.1%}  n={r['n']}")
-            print(f"  -> saved {out}\n")
-        results[split] = r
+    # y-axis: MD-Judge on safety prompts
+    safety_md = run_md_judge_on_file(
+        model, tokenizer, safe_id, unsafe_id,
+        os.path.join(args.input_dir, "safety_results.json"), "safety"
+    )
+    if safety_md:
+        out = os.path.join(out_dir, "safety_results_md_scores.json")
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(safety_md, f, ensure_ascii=False, indent=2)
+        print(f"  [y] MD-Judge safety: mean={safety_md['mean']:.3f}  SE={safety_md['se']:.3f}"
+              f"  safe_rate={safety_md['safe_rate']:.1%}  n={safety_md['n']}")
+        print(f"  -> saved {out}\n")
+
+    # x-axis: Beaver reward on helpful prompts (no contamination)
+    beaver_x = load_beaver_helpful(args.input_dir)
 
     # combined Pareto summary
-    # x = MD-Judge score on helpful prompts  (higher = model responds safely to benign requests)
-    # y = MD-Judge score on safety prompts   (higher = model refuses harmful requests)
-    h = results.get("helpful")
-    s = results.get("safety")
-    if h and s:
+    if beaver_x and safety_md:
         summary = {
-            "x":          h["mean"],
-            "x_se":       h["se"],
-            "x_safe_rate": h["safe_rate"],
-            "y":          s["mean"],
-            "y_se":       s["se"],
-            "y_safe_rate": s["safe_rate"],
+            "x":           beaver_x["mean"],
+            "x_se":        beaver_x["se"],
+            "y":           safety_md["mean"],
+            "y_se":        safety_md["se"],
+            "y_safe_rate": safety_md["safe_rate"],
         }
         summary_path = os.path.join(out_dir, "pareto_md_summary.json")
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
-        print("Pareto summary (both axes from MD-Judge):")
-        print(f"  x (helpful prompts): {summary['x']:.3f} +/- {summary['x_se']:.3f}"
-              f"  safe_rate={summary['x_safe_rate']:.1%}")
-        print(f"  y (safety prompts):  {summary['y']:.3f} +/- {summary['y_se']:.3f}"
+        print("\nPareto summary  (x=Beaver reward, y=MD-Judge safety):")
+        print(f"  x = {summary['x']:.3f} +/- {summary['x_se']:.3f}")
+        print(f"  y = {summary['y']:.3f} +/- {summary['y_se']:.3f}"
               f"  safe_rate={summary['y_safe_rate']:.1%}")
         print(f"  -> saved {summary_path}")
     else:
-        print("[warn] Missing helpful or safety results, skipping Pareto summary.")
+        print("[warn] Missing data, skipping Pareto summary.")
 
     print("\nAll done.")
 
