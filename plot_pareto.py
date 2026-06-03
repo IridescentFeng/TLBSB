@@ -44,22 +44,44 @@ MARKER = {
 MS = 120   # marker size
 
 # ── per-method config ─────────────────────────────────────────────────────────
-# key: (family, dest, display_label, label_dx, label_dy)
+# key: (family, dest, display_label)
 META = {
-    "X1_HtoS":   ("X1",    "toS", "TLBSB H→S",   0.06, -0.50),
-    "X1_HtoM":   ("X1",    "toM", "TLBSB H→M",   0.06,  0.25),
-    "X1_StoH":   ("X1",    "toH", "TLBSB S→H",   0.06,  0.25),
-    "X1_StoM":   ("X1",    "toM", "TLBSB S→M",   0.06, -0.50),
-    "SACPO_HtoS":("SACPO", "toS", "SACPO H→S",   0.06, -0.50),
-    "SACPO_HtoM":("SACPO", "toM", "SACPO H→M",   0.06,  0.25),
-    "SACPO_StoH":("SACPO", "toH", "SACPO S→H",   0.06,  0.25),
-    "SACPO_StoM":("SACPO", "toM", "SACPO S→M",   0.06, -0.50),
-    "V6_HtoS":   ("V6",    "toS", "V6 H→S",      0.06,  0.25),
-    "V6_HtoM":   ("V6",    "toM", "V6 H→M",      0.06, -0.50),
-    "V6_StoH":   ("V6",    "toH", "V6 S→H",      0.06,  0.25),
-    "V6_StoM":   ("V6",    "toM", "V6 S→M",      0.06, -0.50),
-    "Helpful_baseline": ("base", "toS", "π_r (init)", 0.06, 0.25),
-    "Safety_baseline":  ("base", "toH", "π_s (init)", 0.06, 0.25),
+    "X1_HtoS":   ("X1",    "toS", "TLBSB H→S"),
+    "X1_HtoM":   ("X1",    "toM", "TLBSB H→M"),
+    "X1_StoH":   ("X1",    "toH", "TLBSB S→H"),
+    "X1_StoM":   ("X1",    "toM", "TLBSB S→M"),
+    "SACPO_HtoS":("SACPO", "toS", "SACPO H→S"),
+    "SACPO_HtoM":("SACPO", "toM", "SACPO H→M"),
+    "SACPO_StoH":("SACPO", "toH", "SACPO S→H"),
+    "SACPO_StoM":("SACPO", "toM", "SACPO S→M"),
+    "V6_HtoS":   ("V6",    "toS", "V6 H→S"),
+    "V6_HtoM":   ("V6",    "toM", "V6 H→M"),
+    "V6_StoH":   ("V6",    "toH", "V6 S→H"),
+    "V6_StoM":   ("V6",    "toM", "V6 S→M"),
+    "Helpful_baseline": ("base", "toS", "π_r (init)"),
+    "Safety_baseline":  ("base", "toH", "π_s (init)"),
+}
+
+# ── panel-specific label positions ────────────────────────────────────────────
+# (dx, dy, ha, va, arrow)  — dx/dy are data-unit offsets from the point
+# arrow=True draws a thin line from text to point (for crowded areas)
+H_ANNO = {
+    "Helpful_baseline": ( 0.08,  0.09, "left",  "center", False),
+    "SACPO_HtoS":       ( 0.08,  0.00, "left",  "center", False),
+    "V6_HtoM":          (-0.10,  0.22, "right", "bottom", True),
+    "X1_HtoM":          ( 0.06,  0.22, "left",  "bottom", True),
+    "SACPO_HtoM":       ( 0.10, -0.22, "left",  "top",    True),
+    "V6_HtoS":          ( 0.28, -0.22, "left",  "top",    True),
+    "X1_HtoS":          ( 0.08,  0.00, "left",  "center", False),
+}
+S_ANNO = {
+    "Safety_baseline":  (-0.12,  0.00, "right", "center", False),
+    "SACPO_StoH":       (-0.10,  0.00, "right", "center", False),
+    "V6_StoH":          ( 0.08, -0.14, "left",  "top",    True),
+    "X1_StoH":          ( 0.08,  0.08, "left",  "center", False),
+    "V6_StoM":          (-0.10,  0.00, "right", "center", False),
+    "SACPO_StoM":       (-0.10,  0.17, "right", "bottom", True),
+    "X1_StoM":          ( 0.08,  0.17, "left",  "bottom", True),
 }
 
 # which keys go in each panel
@@ -100,7 +122,11 @@ def draw_frontier(ax, xs, ys):
             linestyle="--", zorder=1)
 
 
-def plot_panel(ax, data, keys, panel_title,
+ARROW_PROPS = dict(arrowstyle="-", color="#888888",
+                   lw=0.8, shrinkA=4, shrinkB=4)
+
+
+def plot_panel(ax, data, keys, panel_title, anno_cfg,
                xlabel="Helpful reward (mean ± SE)",
                ylabel="Safety score (mean ± SE)"):
     ax.set_facecolor("#FAFAFA")
@@ -123,28 +149,34 @@ def plot_panel(ax, data, keys, panel_title,
     # points
     for key in present:
         vals = data[key]
-        fam, dest, label, dx, dy = META[key]
+        fam, dest, label = META[key]
         fc, ec = COLOR[fam]
         mk = MARKER[dest]
         x, y   = vals["x"], vals["y"]
         xe, ye = vals.get("x_se", 0), vals.get("y_se", 0)
 
         zo = 2 if fam == "base" else 4
-        alpha_err = 0.5 if fam == "base" else 0.75
 
         ax.errorbar(x, y, xerr=xe, yerr=ye,
                     fmt="none", ecolor=ec, elinewidth=0.9,
-                    capsize=3, capthick=0.9, zorder=zo - 1, alpha=alpha_err)
+                    capsize=3, capthick=0.9, zorder=zo - 1,
+                    alpha=0.5 if fam == "base" else 0.75)
 
         ax.scatter(x, y, s=MS, marker=mk,
                    facecolors=fc if fam != "base" else "none",
                    edgecolors=ec, linewidths=1.4, zorder=zo)
 
-        ax.annotate(
-            label, xy=(x, y), xytext=(x + dx, y + dy),
-            fontsize=8.8, color="#1a1a1a", ha="left", va="center",
-            path_effects=[pe.withStroke(linewidth=2.5, foreground="white")],
-        )
+        # label placement
+        cfg = anno_cfg.get(key)
+        if cfg is None:
+            continue
+        dx, dy, ha, va, arrow = cfg
+        kwargs = dict(fontsize=8.8, color="#1a1a1a", ha=ha, va=va,
+                      path_effects=[pe.withStroke(linewidth=2.5,
+                                                   foreground="white")])
+        if arrow:
+            kwargs["arrowprops"] = ARROW_PROPS
+        ax.annotate(label, xy=(x, y), xytext=(x + dx, y + dy), **kwargs)
 
 
 def build_legend():
@@ -201,8 +233,10 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(13, 5.2))
     fig.subplots_adjust(wspace=0.32)
 
+    anno_cfgs = {"H→*": H_ANNO, "S→*": S_ANNO}
     for ax, (panel_title, keys) in zip(axes, PANELS.items()):
         plot_panel(ax, data, keys, panel_title,
+                   anno_cfg=anno_cfgs[panel_title],
                    xlabel=args.xlabel, ylabel=args.ylabel)
 
     legend = build_legend()
