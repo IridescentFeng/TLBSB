@@ -117,25 +117,28 @@ def load_model(base_model_path: str, checkpoint_path: str):
     hidden_size = model.config.hidden_size
     model.safety_critic = nn.Linear(hidden_size, 1)
 
-    # Load checkpoint weights (safety_critic saved together with model)
+    # Load checkpoint — TLBSB saves via torch.save as:
+    #   {'step_idx': ..., 'state': <state_dict>, 'metrics': ...}
+    # safety_critic.weight / .bias are inside 'state'.
     ckpt = Path(checkpoint_path)
-    state_dict_path = ckpt / "pytorch_model.bin"
-    if not state_dict_path.exists():
-        # Try sharded checkpoint
-        import glob
-        shards = sorted(glob.glob(str(ckpt / "pytorch_model-*.bin")))
-        if shards:
-            import torch
-            combined = {}
-            for s in shards:
-                combined.update(torch.load(s, map_location="cpu"))
-            model.load_state_dict(combined, strict=False)
-        else:
-            print(f"[warn] No pytorch_model.bin at {ckpt}, safety_critic uses random init")
-    else:
+    policy_pt = ckpt / "policy.pt"
+    if policy_pt.exists():
         import torch
-        sd = torch.load(state_dict_path, map_location="cpu")
+        obj = torch.load(str(policy_pt), map_location="cpu")
+        sd = obj["state"] if "state" in obj else obj
         model.load_state_dict(sd, strict=False)
+        print(f"Loaded checkpoint from {policy_pt}")
+    else:
+        # Fallback: LATEST/policy.pt one level up
+        parent_pt = ckpt.parent / "LATEST" / "policy.pt"
+        if parent_pt.exists():
+            import torch
+            obj = torch.load(str(parent_pt), map_location="cpu")
+            sd = obj["state"] if "state" in obj else obj
+            model.load_state_dict(sd, strict=False)
+            print(f"Loaded checkpoint from {parent_pt}")
+        else:
+            print(f"[warn] policy.pt not found at {ckpt}, safety_critic uses random init")
 
     model.eval()
     return model, tokenizer
