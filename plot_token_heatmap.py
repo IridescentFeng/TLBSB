@@ -184,7 +184,10 @@ def get_token_scores(model, tokenizer, prompt: str, max_new_tokens: int = 40):
     # each element is a tuple of (num_layers+1) tensors of shape [batch, 1, hidden]
     scores = []
     for step_hidden in outputs.hidden_states:
-        last_layer = step_hidden[-1]
+        # step_hidden[-1] shape: [batch, seq_len, hidden] (seq_len > 1 on the
+        # first step because it includes the full prompt). Take only the last
+        # position so safety_critic always receives [batch, 1, hidden].
+        last_layer = step_hidden[-1][:, -1:, :]
         h_in = last_layer.to(
             device=model.safety_critic.weight.device,
             dtype=model.safety_critic.weight.dtype,

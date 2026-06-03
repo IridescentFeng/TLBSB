@@ -48,7 +48,7 @@ MARKER = {
     "toH": "o",
     "toM": "D",
 }
-MS = 55
+MS = 35
 
 # ── per-method metadata ───────────────────────────────────────────────────────
 # (color_family, marker_dest, display_label)
