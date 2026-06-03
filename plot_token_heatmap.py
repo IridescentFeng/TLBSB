@@ -89,10 +89,28 @@ MAX_TOKENS_DISPLAY = 36  # wrap after this many tokens
 
 # ── Model inference ───────────────────────────────────────────────────────────
 
+def _load_tokenizer(base_model_path: str):
+    """先尝试 fast，失败降级 slow，全部失败就报清楚的错。"""
+    from transformers import AutoTokenizer
+    last_err = None
+    for kwargs in ({"use_fast": True}, {"use_fast": False}):
+        try:
+            tok = AutoTokenizer.from_pretrained(base_model_path, **kwargs)
+            print(f"Loaded tokenizer (use_fast={kwargs['use_fast']})")
+            return tok
+        except Exception as e:
+            last_err = e
+            print(f"[warn] tokenizer load failed with use_fast={kwargs['use_fast']}: {e}")
+    raise RuntimeError(
+        f"Failed to load tokenizer from {base_model_path}. "
+        f"Last error: {last_err}"
+    )
+
+
 def load_model(base_model_path: str, checkpoint_path: str):
     import torch
     import torch.nn as nn
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 
     bnb_cfg = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -100,7 +118,8 @@ def load_model(base_model_path: str, checkpoint_path: str):
         bnb_4bit_compute_dtype=torch.bfloat16,
         bnb_4bit_use_double_quant=True,
     )
-    tokenizer = AutoTokenizer.from_pretrained(base_model_path, use_fast=False)
+
+    tokenizer = _load_tokenizer(base_model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -113,32 +132,26 @@ def load_model(base_model_path: str, checkpoint_path: str):
     )
     model.config.output_hidden_states = True
 
-    # Attach safety_critic head (same architecture as training)
     hidden_size = model.config.hidden_size
-    model.safety_critic = nn.Linear(hidden_size, 1)
+    model.safety_critic = nn.Linear(hidden_size, 1).to(model.device)
 
-    # Load checkpoint — TLBSB saves via torch.save as:
-    #   {'step_idx': ..., 'state': <state_dict>, 'metrics': ...}
-    # safety_critic.weight / .bias are inside 'state'.
     ckpt = Path(checkpoint_path)
-    policy_pt = ckpt / "policy.pt"
-    if policy_pt.exists():
-        import torch
-        obj = torch.load(str(policy_pt), map_location="cpu")
-        sd = obj["state"] if "state" in obj else obj
-        model.load_state_dict(sd, strict=False)
-        print(f"Loaded checkpoint from {policy_pt}")
-    else:
-        # Fallback: LATEST/policy.pt one level up
-        parent_pt = ckpt.parent / "LATEST" / "policy.pt"
-        if parent_pt.exists():
-            import torch
-            obj = torch.load(str(parent_pt), map_location="cpu")
-            sd = obj["state"] if "state" in obj else obj
+    candidates = [ckpt / "policy.pt", ckpt.parent / "LATEST" / "policy.pt"]
+    loaded = False
+    for p in candidates:
+        if p.exists():
+            obj = torch.load(str(p), map_location="cpu")
+            sd = obj["state"] if isinstance(obj, dict) and "state" in obj else obj
             model.load_state_dict(sd, strict=False)
-            print(f"Loaded checkpoint from {parent_pt}")
-        else:
-            print(f"[warn] policy.pt not found at {ckpt}, safety_critic uses random init")
+            print(f"Loaded checkpoint from {p}")
+            sc_keys = [k for k in sd.keys() if "safety_critic" in k]
+            print(f"  safety_critic keys found: {sc_keys}")
+            if not sc_keys:
+                print("  [warn] no safety_critic.* in checkpoint, head stays random!")
+            loaded = True
+            break
+    if not loaded:
+        print(f"[warn] policy.pt not found at {ckpt} or LATEST/, safety_critic is random")
 
     model.eval()
     return model, tokenizer
@@ -171,8 +184,12 @@ def get_token_scores(model, tokenizer, prompt: str, max_new_tokens: int = 40):
     # each element is a tuple of (num_layers+1) tensors of shape [batch, 1, hidden]
     scores = []
     for step_hidden in outputs.hidden_states:
-        last_layer = step_hidden[-1]           # [1, 1, hidden_size]
-        v = model.safety_critic(last_layer)    # [1, 1, 1]
+        last_layer = step_hidden[-1]
+        h_in = last_layer.to(
+            device=model.safety_critic.weight.device,
+            dtype=model.safety_critic.weight.dtype,
+        )
+        v = model.safety_critic(h_in)
         h = torch.sigmoid(v).item()
         scores.append(h)
 
