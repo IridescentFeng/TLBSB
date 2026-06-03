@@ -1,10 +1,10 @@
 """
-Pareto plot for TLBSB paper — two-panel layout.
-  Left panel:  all H→* methods (HtoS, HtoM)
-  Right panel: all S→* methods (StoH, StoM)
+Pareto plot for TLBSB paper - two-panel layout.
+  Left panel:  all H->* methods (HtoS, HtoM)
+  Right panel: all S->* methods (StoH, StoM)
 
 Usage:
-    python plot_pareto.py --data x1_bs_pareto_pku.json --output pareto.pdf
+    python plot_pareto.py --data pareto_mdjudge.json --output pareto.pdf
 """
 
 import json
@@ -29,42 +29,43 @@ matplotlib.rcParams.update({
     "ps.fonttype":       42,
 })
 
-# ── color / marker definitions ────────────────────────────────────────────────
+# ── color / marker config ─────────────────────────────────────────────────────
 COLOR = {
-    "X1":    ("#D94F00", "#D94F00"),   # (facecolor, edgecolor)
+    "X1":    ("#D94F00", "#D94F00"),
     "SACPO": ("#2A6DB5", "#2A6DB5"),
     "V6":    ("#6A4C9C", "#6A4C9C"),
     "base":  ("#777777", "#777777"),
 }
 MARKER = {
-    "toS": "o",   # →S  (pure safety)
-    "toH": "o",   # →H  (pure helpful)
-    "toM": "D",   # →M  (mixed)
+    "toS": "o",
+    "toH": "o",
+    "toM": "D",
 }
-MS = 120   # marker size
+MS = 120
 
-# ── per-method config ─────────────────────────────────────────────────────────
-# key: (family, dest, display_label)
+# ── per-method metadata ───────────────────────────────────────────────────────
+# (color_family, marker_dest, display_label)
 META = {
-    "X1_HtoS":   ("X1",    "toS", "TLBSB H→S"),
-    "X1_HtoM":   ("X1",    "toM", "TLBSB H→M"),
-    "X1_StoH":   ("X1",    "toH", "TLBSB S→H"),
-    "X1_StoM":   ("X1",    "toM", "TLBSB S→M"),
-    "SACPO_HtoS":("SACPO", "toS", "SACPO H→S"),
-    "SACPO_HtoM":("SACPO", "toM", "SACPO H→M"),
-    "SACPO_StoH":("SACPO", "toH", "SACPO S→H"),
-    "SACPO_StoM":("SACPO", "toM", "SACPO S→M"),
-    "V6_HtoS":   ("V6",    "toS", "V6 H→S"),
-    "V6_HtoM":   ("V6",    "toM", "V6 H→M"),
-    "V6_StoH":   ("V6",    "toH", "V6 S→H"),
-    "V6_StoM":   ("V6",    "toM", "V6 S→M"),
-    "Helpful_baseline": ("base", "toS", "π_r (init)"),
-    "Safety_baseline":  ("base", "toH", "π_s (init)"),
+    "X1_HtoS":          ("X1",    "toS", "TLBSB H→S"),
+    "X1_HtoM":          ("X1",    "toM", "TLBSB H→M"),
+    "X1_StoH":          ("X1",    "toH", "TLBSB S→H"),
+    "X1_StoM":          ("X1",    "toM", "TLBSB S→M"),
+    "SACPO_HtoS":       ("SACPO", "toS", "SACPO H→S"),
+    "SACPO_HtoM":       ("SACPO", "toM", "SACPO H→M"),
+    "SACPO_StoH":       ("SACPO", "toH", "SACPO S→H"),
+    "SACPO_StoM":       ("SACPO", "toM", "SACPO S→M"),
+    "V6_HtoS":          ("V6",    "toS", "V6 H→S"),
+    "V6_HtoM":          ("V6",    "toM", "V6 H→M"),
+    "V6_StoH":          ("V6",    "toH", "V6 S→H"),
+    "V6_StoM":          ("V6",    "toM", "V6 S→M"),
+    "Helpful_baseline": ("base",  "toS", "π_r (init)"),
+    "Safety_baseline":  ("base",  "toH", "π_s (init)"),
 }
 
 # ── panel-specific label positions ────────────────────────────────────────────
-# (dx, dy, ha, va, arrow)  — dx/dy are data-unit offsets from the point
-# arrow=True draws a thin line from text to point (for crowded areas)
+# (dx, dy, ha, va, use_arrow)
+# dx/dy: data-unit offset from the point to the text anchor
+# use_arrow=True: draw a thin connector line from text to point
 H_ANNO = {
     "Helpful_baseline": ( 0.08,  0.09, "left",  "center", False),
     "SACPO_HtoS":       ( 0.08,  0.00, "left",  "center", False),
@@ -84,20 +85,31 @@ S_ANNO = {
     "X1_StoM":          ( 0.08,  0.17, "left",  "bottom", True),
 }
 
-# which keys go in each panel
+# ── panel membership ──────────────────────────────────────────────────────────
 PANELS = {
     "H→*": ["Helpful_baseline",
-             "X1_HtoS", "X1_HtoM",
-             "SACPO_HtoS", "SACPO_HtoM",
-             "V6_HtoS", "V6_HtoM"],
+                 "X1_HtoS", "X1_HtoM",
+                 "SACPO_HtoS", "SACPO_HtoM",
+                 "V6_HtoS", "V6_HtoM"],
     "S→*": ["Safety_baseline",
-             "X1_StoH", "X1_StoM",
-             "SACPO_StoH", "SACPO_StoM",
-             "V6_StoH", "V6_StoM"],
+                 "X1_StoH", "X1_StoM",
+                 "SACPO_StoH", "SACPO_StoM",
+                 "V6_StoH", "V6_StoM"],
 }
 
+ANNO_CFG = {
+    "H→*": H_ANNO,
+    "S→*": S_ANNO,
+}
+
+# thin connector line for crowded labels (no arrowhead)
+ARROW_PROPS = dict(arrowstyle="-", color="#999999", linewidth=0.8)
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def pareto_frontier(points):
+    """Return indices of non-dominated points, sorted by x."""
     pts = np.array(points)
     n = len(pts)
     dominated = np.zeros(n, dtype=bool)
@@ -116,18 +128,19 @@ def pareto_frontier(points):
 def draw_frontier(ax, xs, ys):
     pts = list(zip(xs, ys))
     idx = pareto_frontier(pts)
+    if len(idx) < 2:
+        return  # single Pareto-optimal point: nothing to draw
     px = [pts[i][0] for i in idx]
     py = [pts[i][1] for i in idx]
-    ax.plot(px, py, color="#BBBBBB", linewidth=1.4,
-            linestyle="--", zorder=1)
+    ax.plot(px, py, color="#BBBBBB", linewidth=1.4, linestyle="--", zorder=1)
 
 
-ARROW_PROPS = dict(arrowstyle="-", color="#888888", lw=0.8)
+# ── panel drawing ─────────────────────────────────────────────────────────────
 
+def plot_panel(ax, data, panel_title, xlabel, ylabel):
+    keys     = PANELS[panel_title]
+    anno_cfg = ANNO_CFG[panel_title]
 
-def plot_panel(ax, data, keys, panel_title, anno_cfg,
-               xlabel="Helpful reward (mean ± SE)",
-               ylabel="Safety score (mean ± SE)"):
     ax.set_facecolor("#FAFAFA")
     ax.grid(True, color="#E2E2E2", linewidth=0.8, zorder=0)
     ax.set_title(panel_title, fontsize=13, fontweight="bold", pad=8)
@@ -135,26 +148,23 @@ def plot_panel(ax, data, keys, panel_title, anno_cfg,
     ax.set_ylabel(ylabel, fontsize=10.5, labelpad=5)
     ax.tick_params(labelsize=9.5)
 
-    present = [k for k in keys if k in data and k in META]
+    present       = [k for k in keys if k in data and k in META]
     baseline_keys = {"Helpful_baseline", "Safety_baseline"}
     frontier_keys = [k for k in present if k not in baseline_keys]
 
-    # Pareto frontier
     if frontier_keys:
-        xs = [data[k]["x"] for k in frontier_keys]
-        ys = [data[k]["y"] for k in frontier_keys]
-        draw_frontier(ax, xs, ys)
+        draw_frontier(ax,
+                      [data[k]["x"] for k in frontier_keys],
+                      [data[k]["y"] for k in frontier_keys])
 
-    # points
     for key in present:
-        vals = data[key]
+        vals      = data[key]
         fam, dest, label = META[key]
-        fc, ec = COLOR[fam]
-        mk = MARKER[dest]
-        x, y   = vals["x"], vals["y"]
-        xe, ye = vals.get("x_se", 0), vals.get("y_se", 0)
-
-        zo = 2 if fam == "base" else 4
+        fc, ec    = COLOR[fam]
+        mk        = MARKER[dest]
+        x, y      = vals["x"], vals["y"]
+        xe, ye    = vals.get("x_se", 0), vals.get("y_se", 0)
+        zo        = 2 if fam == "base" else 4
 
         ax.errorbar(x, y, xerr=xe, yerr=ye,
                     fmt="none", ecolor=ec, elinewidth=0.9,
@@ -165,65 +175,56 @@ def plot_panel(ax, data, keys, panel_title, anno_cfg,
                    facecolors=fc if fam != "base" else "none",
                    edgecolors=ec, linewidths=1.4, zorder=zo)
 
-        # label placement
         cfg = anno_cfg.get(key)
         if cfg is None:
             continue
-        dx, dy, ha, va, arrow = cfg
-        kwargs = dict(fontsize=8.8, color="#1a1a1a", ha=ha, va=va,
-                      path_effects=[pe.withStroke(linewidth=2.5,
-                                                   foreground="white")])
-        if arrow:
-            kwargs["arrowprops"] = ARROW_PROPS
-        ax.annotate(label, xy=(x, y), xytext=(x + dx, y + dy), **kwargs)
+        dx, dy, ha, va, use_arrow = cfg
+        kw = dict(fontsize=8.8, color="#1a1a1a", ha=ha, va=va,
+                  path_effects=[pe.withStroke(linewidth=2.5, foreground="white")])
+        if use_arrow:
+            kw["arrowprops"] = ARROW_PROPS
+        ax.annotate(label, xy=(x, y), xytext=(x + dx, y + dy), **kw)
 
+
+# ── legend ────────────────────────────────────────────────────────────────────
 
 def build_legend():
-    """Shared legend entries."""
-    handles = []
-
-    # family colors
-    handles.append(Line2D([0], [0], linestyle="none", marker="none",
-                          label="$\\bf{Method}$"))
+    h = []
+    h.append(Line2D([0], [0], ls="none", marker="none",
+                    label="$\\bf{Method}$"))
     for fam, (fc, ec) in COLOR.items():
         if fam == "base":
             continue
-        name = {"X1": "TLBSB (ours)", "SACPO": "SACPO", "V6": "V6 (ablation)"}[fam]
-        handles.append(Line2D([0], [0], linestyle="none",
-                               marker="o", markersize=8,
-                               markerfacecolor=fc, markeredgecolor=ec,
-                               markeredgewidth=1.3, label=name))
+        name = {"X1": "TLBSB (ours)", "SACPO": "SACPO",
+                "V6": "V6 (ablation)"}[fam]
+        h.append(Line2D([0], [0], ls="none", marker="o", markersize=8,
+                        markerfacecolor=fc, markeredgecolor=ec,
+                        markeredgewidth=1.3, label=name))
+    h.append(Line2D([0], [0], ls="none", marker="o", markersize=8,
+                    markerfacecolor="none", markeredgecolor="#777777",
+                    markeredgewidth=1.3,
+                    label="Init baseline (π_r / π_s)"))
+    h.append(Line2D([0], [0], ls="none", marker="none",
+                    label="$\\bf{Stage\\ 2\\ data}$"))
+    h.append(Line2D([0], [0], ls="none", marker="o", markersize=8,
+                    markerfacecolor="#888888", markeredgecolor="#888888",
+                    label="Pure (→S / →H)"))
+    h.append(Line2D([0], [0], ls="none", marker="D", markersize=7,
+                    markerfacecolor="#888888", markeredgecolor="#888888",
+                    label="Mixed (→M)"))
+    h.append(Line2D([0], [0], color="#BBBBBB", linewidth=1.4,
+                    linestyle="--", label="Pareto frontier"))
+    return h
 
-    # baseline
-    handles.append(Line2D([0], [0], linestyle="none",
-                           marker="o", markersize=8,
-                           markerfacecolor="none", markeredgecolor="#777777",
-                           markeredgewidth=1.3, label="Init baseline (π_r / π_s)"))
 
-    # marker shapes
-    handles.append(Line2D([0], [0], linestyle="none", marker="none",
-                          label="$\\bf{Stage\\;2\\;data}$"))
-    handles.append(Line2D([0], [0], linestyle="none",
-                           marker="o", markersize=8,
-                           markerfacecolor="#888888", markeredgecolor="#888888",
-                           label="Pure (→S / →H)"))
-    handles.append(Line2D([0], [0], linestyle="none",
-                           marker="D", markersize=7,
-                           markerfacecolor="#888888", markeredgecolor="#888888",
-                           label="Mixed (→M)"))
-
-    # pareto line
-    handles.append(Line2D([0], [0], color="#BBBBBB", linewidth=1.4,
-                           linestyle="--", label="Pareto frontier"))
-    return handles
-
+# ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data",   default="x1_bs_pareto_pku.json")
+    parser.add_argument("--data",   default="pareto_mdjudge.json")
     parser.add_argument("--output", default="pareto.pdf")
-    parser.add_argument("--ylabel", default="Safety score (mean ± SE)  →  safer")
     parser.add_argument("--xlabel", default="Helpful reward (mean ± SE)  →  more helpful")
+    parser.add_argument("--ylabel", default="Safety score (mean ± SE)  →  safer")
     args = parser.parse_args()
 
     with open(args.data) as f:
@@ -232,31 +233,21 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(13, 5.2))
     fig.subplots_adjust(wspace=0.32)
 
-    anno_cfgs = {"H→*": H_ANNO, "S→*": S_ANNO}
-    for ax, (panel_title, keys) in zip(axes, PANELS.items()):
-        plot_panel(ax, data, keys, panel_title,
-                   anno_cfg=anno_cfgs[panel_title],
-                   xlabel=args.xlabel, ylabel=args.ylabel)
+    for ax, panel_title in zip(axes, PANELS):
+        plot_panel(ax, data, panel_title, args.xlabel, args.ylabel)
 
-    legend = build_legend()
-    fig.legend(handles=legend,
-               loc="lower center",
-               ncol=7,
-               fontsize=9,
-               framealpha=0.92,
-               edgecolor="#CCCCCC",
-               handlelength=1.4,
-               handletextpad=0.5,
-               columnspacing=1.0,
+    fig.legend(handles=build_legend(),
+               loc="lower center", ncol=7, fontsize=9,
+               framealpha=0.92, edgecolor="#CCCCCC",
+               handlelength=1.4, handletextpad=0.5, columnspacing=1.0,
                bbox_to_anchor=(0.5, -0.12))
 
     fig.tight_layout(rect=[0, 0.08, 1, 1])
-
     fig.savefig(args.output, dpi=300, bbox_inches="tight")
     print(f"Saved: {args.output}")
 
-    alt = args.output.replace(".pdf", ".png") if args.output.endswith(".pdf") \
-        else args.output.replace(".png", ".pdf")
+    alt = (args.output.replace(".pdf", ".png") if args.output.endswith(".pdf")
+           else args.output.replace(".png", ".pdf"))
     fig.savefig(alt, dpi=300, bbox_inches="tight")
     print(f"Saved: {alt}")
     plt.close(fig)
