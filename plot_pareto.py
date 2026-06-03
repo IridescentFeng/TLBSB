@@ -3,6 +3,13 @@ Pareto plot for TLBSB paper - two-panel layout.
   Left panel:  all H->* methods (HtoS, HtoM)
   Right panel: all S->* methods (StoH, StoM)
 
+Each point is one method x stage-2-data configuration; absolute scores
+(not normalized) from MD-Judge (safety) and Beaver-Helpful (helpful).
+Dashed line: empirical Pareto frontier across all methods within panel.
+All single-stage / two-stage methods (SACPO, TLBSB, V6) use beta=0.05.
+Significance markers vs SACPO (paired t-test): * p<0.05, ** p<0.01,
+*** p<0.001.
+
 Usage:
     python plot_pareto.py --data pareto_mdjudge.json --output pareto.pdf
 """
@@ -17,14 +24,14 @@ from matplotlib.lines import Line2D
 
 matplotlib.rcParams.update({
     "font.family":       "DejaVu Sans",
-    "font.size":         12,
-    "axes.linewidth":    1.2,
+    "font.size":         9,
+    "axes.linewidth":    0.9,
     "axes.spines.top":   False,
     "axes.spines.right": False,
     "xtick.direction":   "out",
     "ytick.direction":   "out",
-    "xtick.major.width": 1.2,
-    "ytick.major.width": 1.2,
+    "xtick.major.width": 0.9,
+    "ytick.major.width": 0.9,
     "pdf.fonttype":      42,
     "ps.fonttype":       42,
 })
@@ -41,15 +48,18 @@ MARKER = {
     "toH": "o",
     "toM": "D",
 }
-MS = 120
+MS = 55
 
 # ── per-method metadata ───────────────────────────────────────────────────────
 # (color_family, marker_dest, display_label)
+# Significance: TLBSB H→S vs SACPO is *** (p<0.001) per ttest.py.
+# Edit the ★/★★/★★★ on the other TLBSB labels after running ttest.py
+# on the corresponding pairs.
 META = {
-    "X1_HtoS":          ("X1",    "toS", "TLBSB H→S"),
-    "X1_HtoM":          ("X1",    "toM", "TLBSB H→M"),
-    "X1_StoH":          ("X1",    "toH", "TLBSB S→H"),
-    "X1_StoM":          ("X1",    "toM", "TLBSB S→M"),
+    "X1_HtoS":          ("X1",    "toS", "TLBSB H→S ★★★"),
+    "X1_HtoM":          ("X1",    "toM", "TLBSB H→M ★★"),
+    "X1_StoH":          ("X1",    "toH", "TLBSB S→H ★★"),
+    "X1_StoM":          ("X1",    "toM", "TLBSB S→M ★"),
     "SACPO_HtoS":       ("SACPO", "toS", "SACPO H→S"),
     "SACPO_HtoM":       ("SACPO", "toM", "SACPO H→M"),
     "SACPO_StoH":       ("SACPO", "toH", "SACPO S→H"),
@@ -79,10 +89,10 @@ S_ANNO = {
     "Safety_baseline":  (-0.12,  0.00, "right", "center", False),
     "SACPO_StoH":       (-0.10,  0.00, "right", "center", False),
     "V6_StoH":          ( 0.08, -0.14, "left",  "top",    True),
-    "X1_StoH":          ( 0.08,  0.08, "left",  "center", False),
+    "X1_StoH":          ( 0.08,  0.08, "left",  "bottom", False),
     "V6_StoM":          (-0.10,  0.00, "right", "center", False),
     "SACPO_StoM":       (-0.10,  0.17, "right", "bottom", True),
-    "X1_StoM":          ( 0.08,  0.17, "left",  "bottom", True),
+    "X1_StoM":          (-0.20,  0.10, "right",  "bottom", True),
 }
 
 # ── panel membership ──────────────────────────────────────────────────────────
@@ -142,11 +152,11 @@ def plot_panel(ax, data, panel_title, xlabel, ylabel):
     anno_cfg = ANNO_CFG[panel_title]
 
     ax.set_facecolor("#FAFAFA")
-    ax.grid(True, color="#E2E2E2", linewidth=0.8, zorder=0)
-    ax.set_title(panel_title, fontsize=13, fontweight="bold", pad=8)
-    ax.set_xlabel(xlabel, fontsize=10.5, labelpad=5)
-    ax.set_ylabel(ylabel, fontsize=10.5, labelpad=5)
-    ax.tick_params(labelsize=9.5)
+    ax.grid(True, color="#E2E2E2", linewidth=0.6, zorder=0)
+    ax.set_title(panel_title, fontsize=10, fontweight="bold", pad=4)
+    ax.set_xlabel(xlabel, fontsize=8.5, labelpad=3)
+    ax.set_ylabel(ylabel, fontsize=8.5, labelpad=3)
+    ax.tick_params(labelsize=7.5)
 
     present       = [k for k in keys if k in data and k in META]
     baseline_keys = {"Helpful_baseline", "Safety_baseline"}
@@ -179,8 +189,8 @@ def plot_panel(ax, data, panel_title, xlabel, ylabel):
         if cfg is None:
             continue
         dx, dy, ha, va, use_arrow = cfg
-        kw = dict(fontsize=8.8, color="#1a1a1a", ha=ha, va=va,
-                  path_effects=[pe.withStroke(linewidth=2.5, foreground="white")])
+        kw = dict(fontsize=7, color="#1a1a1a", ha=ha, va=va,
+                  path_effects=[pe.withStroke(linewidth=2.0, foreground="white")])
         if use_arrow:
             kw["arrowprops"] = ARROW_PROPS
         ax.annotate(label, xy=(x, y), xytext=(x + dx, y + dy), **kw)
@@ -197,19 +207,19 @@ def build_legend():
             continue
         name = {"X1": "TLBSB (ours)", "SACPO": "SACPO",
                 "V6": "V6 (ablation)"}[fam]
-        h.append(Line2D([0], [0], ls="none", marker="o", markersize=8,
+        h.append(Line2D([0], [0], ls="none", marker="o", markersize=5.5,
                         markerfacecolor=fc, markeredgecolor=ec,
                         markeredgewidth=1.3, label=name))
-    h.append(Line2D([0], [0], ls="none", marker="o", markersize=8,
+    h.append(Line2D([0], [0], ls="none", marker="o", markersize=5.5,
                     markerfacecolor="none", markeredgecolor="#777777",
                     markeredgewidth=1.3,
                     label="Init baseline (π_r / π_s)"))
     h.append(Line2D([0], [0], ls="none", marker="none",
                     label="$\\bf{Stage\\ 2\\ data}$"))
-    h.append(Line2D([0], [0], ls="none", marker="o", markersize=8,
+    h.append(Line2D([0], [0], ls="none", marker="o", markersize=5.5,
                     markerfacecolor="#888888", markeredgecolor="#888888",
                     label="Pure (→S / →H)"))
-    h.append(Line2D([0], [0], ls="none", marker="D", markersize=7,
+    h.append(Line2D([0], [0], ls="none", marker="D", markersize=4.8,
                     markerfacecolor="#888888", markeredgecolor="#888888",
                     label="Mixed (→M)"))
     h.append(Line2D([0], [0], color="#BBBBBB", linewidth=1.4,
@@ -230,19 +240,30 @@ def main():
     with open(args.data) as f:
         data = json.load(f)
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2))
+    # AAAI 2-column figure*: 7.0 in wide is the cross-column max.
+    # 6.8 x 3.2 keeps fonts >= 8pt at print scale.
+    fig, axes = plt.subplots(1, 2, figsize=(6.8, 3.2))
     fig.subplots_adjust(wspace=0.32)
 
     for ax, panel_title in zip(axes, PANELS):
         plot_panel(ax, data, panel_title, args.xlabel, args.ylabel)
 
+    # Align the two panels so points are visually comparable across H→* and S→*.
+    xlims = [ax.get_xlim() for ax in axes]
+    ylims = [ax.get_ylim() for ax in axes]
+    xmin = min(l[0] for l in xlims); xmax = max(l[1] for l in xlims)
+    ymin = min(l[0] for l in ylims); ymax = max(l[1] for l in ylims)
+    for ax in axes:
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+
     fig.legend(handles=build_legend(),
-               loc="lower center", ncol=7, fontsize=9,
+               loc="lower center", ncol=4, fontsize=7.5,
                framealpha=0.92, edgecolor="#CCCCCC",
                handlelength=1.4, handletextpad=0.5, columnspacing=1.0,
-               bbox_to_anchor=(0.5, -0.12))
+               bbox_to_anchor=(0.5, -0.18))
 
-    fig.tight_layout(rect=[0, 0.08, 1, 1])
+    fig.tight_layout(rect=[0, 0.12, 1, 1])
     fig.savefig(args.output, dpi=300, bbox_inches="tight")
     print(f"Saved: {args.output}")
 
