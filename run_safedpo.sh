@@ -19,6 +19,7 @@ python "$SCRIPT" \
     --model_path "$MODEL_PATH" \
     --data_dir "$DATA_DIR" \
     --data_files pku_helpful.jsonl pku_safety.jsonl \
+    --safety_files pku_safety.jsonl \
     --output_dir "${OUTPUT_BASE}/SafeDPO_delta5" \
     --safety_margin 5.0 \
     --beta 0.1 \

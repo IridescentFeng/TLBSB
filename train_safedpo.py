@@ -59,7 +59,7 @@ def _parse_safe_flag(val) -> bool:
     return bool(val)
 
 
-def apply_transformation_T(example):
+def apply_transformation_T(example, is_safety_split: bool = False):
     """
     SafeDPO transformation T (Section 3.2 of Kim et al., ICLR 2026).
 
@@ -68,7 +68,11 @@ def apply_transformation_T(example):
         better_response_id, response_0, response_1,
         is_response_0_safe, is_response_1_safe, prompt
       Layout B (chosen/rejected pre-split):
-        chosen, rejected, prompt  (no safety fields → treated as safe/safe)
+        chosen, rejected, prompt  (no safety fields)
+
+    is_safety_split : for Layout B files, marks that chosen=safe / rejected=unsafe
+                      so the safety margin Δ is applied (h_rejected=1). Helpful
+                      files leave h_rejected=0 (no margin).
 
     Returns dict with chosen/rejected/h_rejected, or None if both unsafe.
     """
@@ -79,7 +83,7 @@ def apply_transformation_T(example):
             "prompt": prompt,
             "chosen": example["chosen"],
             "rejected": example["rejected"],
-            "h_rejected": 0,
+            "h_rejected": 1 if is_safety_split else 0,
         }
 
     # ── Layout A: standard PKU-SafeRLHF fields ───────────────────────────────
@@ -116,17 +120,30 @@ def _load_jsonl(path: Path) -> List[dict]:
     return examples
 
 
-def build_safedpo_dataset(data_dir: str, filenames: Optional[List[str]] = None):
+def build_safedpo_dataset(
+    data_dir: str,
+    filenames: Optional[List[str]] = None,
+    safety_files: Optional[List[str]] = None,
+):
     """
     Load preference pairs from local JSONL files and apply transformation T.
 
-    data_dir   : directory containing the JSONL files
-    filenames  : list of filenames to load (default: pku_helpful.jsonl + pku_safety.jsonl)
+    data_dir     : directory containing the JSONL files
+    filenames    : list of filenames to load (default: pku_helpful + pku_safety)
+    safety_files : subset of filenames that are the safety split. For Layout B
+                   files (chosen/rejected pre-split, no safety fields) these get
+                   h_rejected=1 so the safety margin Δ actually fires. Without
+                   this, Layout B safety data would silently degrade SafeDPO to
+                   plain DPO (Δ never applied).
     """
     data_dir = Path(data_dir)
     if filenames is None:
         filenames = ["pku_helpful.jsonl", "pku_safety.jsonl"]
+    if safety_files is None:
+        safety_files = ["pku_safety.jsonl"]
+    safety_set = set(safety_files)
 
+    # Keep each example tagged with whether it came from a safety-split file.
     raw = []
     for fname in filenames:
         fpath = data_dir / fname
@@ -135,7 +152,9 @@ def build_safedpo_dataset(data_dir: str, filenames: Optional[List[str]] = None):
             continue
         loaded = _load_jsonl(fpath)
         logger.info("Loaded %d examples from %s", len(loaded), fpath)
-        raw.extend(loaded)
+        is_safety = fname in safety_set
+        for ex in loaded:
+            raw.append((ex, is_safety))
 
     if not raw:
         raise FileNotFoundError(
@@ -145,7 +164,7 @@ def build_safedpo_dataset(data_dir: str, filenames: Optional[List[str]] = None):
 
     transformed = []
     n_kept = n_swapped = n_discarded = 0
-    for ex in raw:
+    for ex, is_safety in raw:
         # Pre-check for both-unsafe in Layout A
         if "better_response_id" in ex:
             bid = int(ex["better_response_id"])
@@ -159,7 +178,7 @@ def build_safedpo_dataset(data_dir: str, filenames: Optional[List[str]] = None):
         else:
             is_swap = False
 
-        result = apply_transformation_T(ex)
+        result = apply_transformation_T(ex, is_safety_split=is_safety)
         if result is None:
             n_discarded += 1
             continue
@@ -170,9 +189,11 @@ def build_safedpo_dataset(data_dir: str, filenames: Optional[List[str]] = None):
             n_kept += 1
         transformed.append(result)
 
+    n_margin = sum(1 for r in transformed if r["h_rejected"] == 1)
     logger.info(
-        "Dataset after T: kept=%d  swapped=%d  discarded=%d  total=%d",
-        n_kept, n_swapped, n_discarded, len(transformed),
+        "Dataset after T: kept=%d  swapped=%d  discarded=%d  total=%d  "
+        "(h_rejected=1 on %d examples → Δ active)",
+        n_kept, n_swapped, n_discarded, len(transformed), n_margin,
     )
 
     from datasets import Dataset
@@ -247,6 +268,10 @@ def parse_args():
     p.add_argument("--data_files", nargs="+",
                    default=["pku_helpful.jsonl", "pku_safety.jsonl"],
                    help="JSONL filenames inside data_dir to use for training")
+    p.add_argument("--safety_files", nargs="+",
+                   default=["pku_safety.jsonl"],
+                   help="Subset of data_files that are the safety split "
+                        "(Layout B files here get the safety margin Δ applied)")
     # ── SafeDPO hypers ────────────────────────────────────────────────────────
     p.add_argument("--safety_margin", type=float, default=5.0,
                    help="SafeDPO Δ parameter (0 = no margin)")
@@ -317,7 +342,7 @@ def main():
     )
 
     # ── dataset ───────────────────────────────────────────────────────────────
-    train_ds = build_safedpo_dataset(args.data_dir, args.data_files)
+    train_ds = build_safedpo_dataset(args.data_dir, args.data_files, args.safety_files)
 
     # ── training args ─────────────────────────────────────────────────────────
     training_args = DPOConfig(
