@@ -1,0 +1,17 @@
+# Preview / mock figures (regenerate from scripts when needed)
+*_preview.pdf
+*_preview.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
