@@ -1,8 +1,8 @@
 %% =============================================================
 %% §V.B  Main Results
-%% Note: replace \ttest{p}{sig} placeholders once ttest.py runs.
 %% x = Beaver reward (129 helpful prompts, AlpacaEval benign)
 %% y = MD-Judge safety log-odds (83 red-team prompts, SafeRLHF)
+%% t-test numbers from ttest_results.json (paired, two-sided)
 %% =============================================================
 
 \subsection{Main Results}
@@ -15,102 +15,144 @@ Higher values on both axes are better.
 We report per-sample means $\pm$ SE and draw the empirical Pareto frontier
 among non-baseline methods for each panel.
 
-\textbf{TLBSB consistently dominates SACPO and the V6 ablation.}
+\textbf{TLBSB dominates SACPO on both axes in the H$\,\to\,$S direction.}
 %
-In the H$\,\to\,$S direction (Figure~\ref{fig:pareto}, left panel),
-\textbf{TLBSB H$\to$S} achieves the highest scores on both axes:
-Beaver reward $6.04 \pm 0.67$ and MD-Judge safety $1.59 \pm 0.19$.
+\textbf{TLBSB H$\to$S} achieves Beaver reward $6.04 \pm 0.67$ and MD-Judge safety
+$1.59 \pm 0.19$, the highest scores on both axes among all H$\,\to\!*$ methods.
 Compared with \textbf{SACPO H$\to$S} ($4.01 \pm 0.57$, $0.90 \pm 0.21$),
-TLBSB gains $\Delta_{\mathrm{helpful}} = +2.03$ and $\Delta_{\mathrm{safety}} = +0.69$,
-both statistically significant ($p < 0.01$).\footnote{%
-  Paired $t$-test on per-sample scores; $n = 129$ for helpful, $n = 83$ for safety.
-  See Appendix~\ref{appendix:ttest} for the full significance table.}
-Compared with the V6 ablation ($5.67 \pm 0.65$, $1.35 \pm 0.21$),
-TLBSB still gains $\Delta_{\mathrm{helpful}} = +0.37$ and $\Delta_{\mathrm{safety}} = +0.24$,
-showing that \emph{distilling the SAP probe from a frozen Beaver-7B-Cost model
-outperforms joint end-to-end probe training}.
-Notably, TLBSB H$\to$S is the sole Pareto-optimal point in this panel,
-Pareto-dominating every other H$\,\to\!*$ method simultaneously on both axes.
+TLBSB gains $\Delta_{\mathrm{helpful}} = +2.03$ ($t_{128}=4.84$, $p<0.001$) and
+$\Delta_{\mathrm{safety}} = +0.69$ ($t_{82}=4.25$, $p<0.001$), both highly
+significant.\footnote{%
+  Paired two-sided $t$-test on per-sample scores;
+  $n=129$ for helpful, $n=83$ for safety.
+  Full significance table in Appendix~\ref{appendix:ttest}.}
+TLBSB H$\to$S is the sole Pareto-optimal point in this panel,
+simultaneously dominating all other H$\,\to\!*$ methods on both axes.
 
-\textbf{The semantic barrier effectively prevents catastrophic forgetting.}
+\textbf{Comparison with V6 ablation (distilled vs.\ joint probe).}
 %
-The helpful-only baseline $\pi_r$ achieves a high Beaver reward ($5.33$) but a
-strongly \emph{negative} safety log-odds ($-0.35$), meaning the model
-systematically generates unsafe responses on red-team prompts.
-After applying TLBSB's second-stage safety alignment,
-the reward \emph{increases} to $6.04$ while safety rises sharply to $1.59$.
-This simultaneous improvement confirms that the semantic barrier in
-Equation~\eqref{eq:barrier} prevents stage-2 alignment from overwriting the
-stage-1 helpful policy: the model refines its safety behaviour without sacrificing
-the linguistic quality already acquired.
+Compared with the V6 ablation ($5.67 \pm 0.65$, $1.35 \pm 0.21$),
+TLBSB gains $\Delta_{\mathrm{helpful}} = +0.37$ ($p = 0.33$, n.s.) and
+$\Delta_{\mathrm{safety}} = +0.24$ ($t_{82}=2.37$, $p = 0.020$).
+The helpful difference is not individually significant, but the safety
+improvement is.
+This reveals where distillation matters: freezing the SAP probe at the value
+distilled from Beaver-7B-Cost provides a strictly more faithful safety
+representation than end-to-end joint training, leading to better safety
+preservation during stage-2 alignment.
+The benefit on the helpful axis is secondary and absorbed into noise at the
+sample size used ($n=129$).
+
+\textbf{The semantic barrier prevents catastrophic forgetting.}
+%
+The helpful-only baseline $\pi_r$ achieves Beaver reward $5.33$ but a
+strongly \emph{negative} safety log-odds ($-0.35$), indicating that the
+model systematically produces unsafe outputs on red-team prompts.
+After TLBSB's second-stage safety alignment,
+the reward \emph{rises} to $6.04$ while safety improves sharply to $1.59$.
+This simultaneous gain on both axes directly confirms that
+the semantic barrier in Equation~\eqref{eq:barrier} prevents stage-2
+training from overwriting the stage-1 helpful policy.
 
 \textbf{S$\,\to\,$H direction.}
 %
-In the S$\,\to\,$H direction (Figure~\ref{fig:pareto}, right panel),
-\textbf{TLBSB S$\to$H} ($5.45 \pm 0.63$, $0.84 \pm 0.22$) again outperforms
-\textbf{SACPO S$\to$H} ($4.62 \pm 0.62$, $0.58 \pm 0.24$)
-on both helpfulness ($\Delta = +0.83$) and safety ($\Delta = +0.26$).
-The V6 ablation ($5.33 \pm 0.64$, $0.81 \pm 0.22$) is similar to TLBSB on safety
-but slightly lower on helpfulness, again confirming the benefit of distillation.
-Comparing the two directions: TLBSB H$\to$S yields higher absolute scores
-than TLBSB S$\to$H on both axes ($6.04 > 5.45$; $1.59 > 0.84$),
-a gap we analyse in Section~\ref{sec:data-asymmetry} as a consequence of
-training data imbalance rather than a failure of the sequential alignment framework.
+In the right panel, \textbf{TLBSB S$\to$H} ($5.45 \pm 0.63$, $0.84 \pm 0.22$)
+outperforms \textbf{SACPO S$\to$H} ($4.62 \pm 0.62$, $0.58 \pm 0.24$)
+on helpfulness ($\Delta = +0.83$, $t_{128}=2.06$, $p=0.041$).
+The safety advantage ($\Delta = +0.27$, $p=0.124$) does not reach significance,
+a result we attribute to the weaker stage-1 starting point (only $3{,}744$
+safety-preferred pairs) and the narrower absolute range of safety scores in
+this direction; see Section~\ref{sec:data-asymmetry}.
+The V6 ablation ($5.33 \pm 0.64$, $0.81 \pm 0.22$) is
+not significantly different from TLBSB on either axis in the S$\,\to\,$H
+setting ($p=0.706$ helpful; $p=0.820$ safety), again consistent with the
+weaker stage-1 signal limiting both methods equally.
 
 \textbf{Mixed-data variants.}
 %
 With mixed-preference data (H$\to$M and S$\to$M),
-TLBSB and SACPO perform comparably in the right panel,
-while TLBSB H$\to$M slightly trails SACPO H$\to$M on helpfulness
-($5.48$ vs.\ $5.63$) but leads on safety ($1.50$ vs.\ $1.37$).
-These mixed results suggest that when the stage-2 training signal is
-heterogeneous (mixed safe/helpful pairs), the marginal benefit of the
-semantic barrier diminishes relative to the pure-data settings.
-We consider the pure H$\to$S and S$\to$H configurations the
-primary experimental evidence for TLBSB's effectiveness.
+no comparison between TLBSB and SACPO reaches significance
+(all $p > 0.30$).
+TLBSB H$\to$M and SACPO H$\to$M are essentially tied on helpful
+($\Delta=-0.15$, n.s.) while TLBSB leads slightly on safety ($\Delta=+0.13$, n.s.).
+We regard the pure H$\to$S and S$\to$H configurations as the primary
+experimental evidence for TLBSB's effectiveness; mixed-data results are
+reported for completeness.
 
 %% =============================================================
-%% §V.E  Effect of Data Asymmetry  (or: "Training Data Imbalance")
+%% §V.E  Effect of Training Data Asymmetry
 %% =============================================================
 
 \subsection{Effect of Training Data Asymmetry}
 \label{sec:data-asymmetry}
 
-A salient observation in Figure~\ref{fig:pareto} is that
-H$\,\to\,$S methods achieve uniformly higher scores on both axes than
-their S$\,\to\,$H counterparts (e.g., TLBSB H$\to$S vs.\ TLBSB S$\to$H:
-$6.04$ vs.\ $5.45$ on helpfulness; $1.59$ vs.\ $0.84$ on safety).
-We attribute this asymmetry to the \emph{imbalance in PKU-SafeRLHF}:
-the dataset contains approximately $10{,}960$ preference pairs in which the
-more helpful response is preferred, versus only $3{,}744$ pairs in which the
-safer response is preferred~\citep{ji2024beavertails}.
+A salient pattern in Figure~\ref{fig:pareto} is that H$\,\to\,$S methods
+achieve higher scores on both axes than their S$\,\to\,$H counterparts
+(TLBSB H$\to$S vs.\ TLBSB S$\to$H: $6.04$ vs.\ $5.45$ helpful;
+$1.59$ vs.\ $0.84$ safety).
+We attribute this asymmetry to \emph{imbalanced} PKU-SafeRLHF:
+the dataset contains approximately $10{,}960$ helpful-preferred pairs versus
+only $3{,}744$ safety-preferred pairs~\citep{ji2024beavertails}.
 
-This imbalance affects the two sequential paths differently:
+This imbalance affects the two paths differently:
 %
 \begin{itemize}[leftmargin=1.8em, itemsep=2pt]
   \item \textbf{H$\,\to\,$S:} Stage 1 trains on $10{,}960$ helpful pairs,
-        yielding a strong helpful-only policy $\pi_r$ with Beaver reward $5.33$.
-        Stage 2 then applies the semantic barrier over $3{,}744$ safety pairs
-        to introduce a safety constraint; the barrier preserves the
-        well-trained helpful representations, resulting in
-        $(x,y) = (6.04, 1.59)$.
+        yielding a strong helpful-only policy $\pi_r$ (Beaver reward $5.33$).
+        Stage 2 applies the semantic barrier over $3{,}744$ safety pairs,
+        preserving the well-trained helpful representations; the result is
+        $(6.04,\; 1.59)$.
   \item \textbf{S$\,\to\,$H:} Stage 1 trains on only $3{,}744$ safety pairs,
-        yielding a weaker safety-only policy $\pi_s$ with Beaver reward $2.21$
-        and safety log-odds $0.56$---already substantially below $\pi_r$ in
-        both dimensions.
-        Stage 2 then applies the barrier over $10{,}960$ helpful pairs.
-        Despite the larger stage-2 dataset, the overall performance ceiling
-        is limited by the weaker stage-1 starting point, yielding
-        $(x,y) = (5.45, 0.84)$.
+        yielding a weaker safety-only policy $\pi_s$
+        (Beaver reward $2.21$; safety log-odds $0.56$).
+        Stage 2 applies the barrier over $10{,}960$ helpful pairs;
+        despite the larger stage-2 dataset, the performance ceiling is
+        limited by the weaker stage-1 starting point, yielding
+        $(5.45,\; 0.84)$.
 \end{itemize}
 
 Crucially, \emph{both directions benefit from the semantic barrier}:
 TLBSB improves over SACPO regardless of order
-($\Delta_{\mathrm{helpful}} = +2.03$ for H$\to$S;
-$\Delta_{\mathrm{helpful}} = +0.83$ for S$\to$H),
-consistent with the order-invariance guarantee in
-Remark~\ref{remark:commutative}.
-The observed performance gap between directions is therefore a dataset property,
-not an algorithmic limitation: providing a balanced PKU-SafeRLHF split would
-be expected to close the gap between the two paths.
-We leave this investigation to future work.
+($\Delta_{\mathrm{helpful}}=+2.03^{***}$ for H$\to$S;
+$\Delta_{\mathrm{helpful}}=+0.83^{*}$ for S$\to$H),
+consistent with the order-invariance result in Remark~\ref{remark:commutative}.
+The observed gap between directions is therefore a property of the dataset,
+not an algorithmic limitation of TLBSB.
+Providing a balanced preference split would be expected to close the gap;
+we leave this to future work.
+
+%% =============================================================
+%% Appendix: Full t-test Table
+%% =============================================================
+
+\subsection*{Appendix: Statistical Significance (paired $t$-tests)}
+\label{appendix:ttest}
+
+\begin{table}[h]
+\centering
+\caption{Paired two-sided $t$-tests. $\Delta = \text{TLBSB} - \text{baseline}$
+(positive = TLBSB better). $n=129$ for helpful; $n=83$ for safety.}
+\label{tab:ttest}
+\small
+\begin{tabular}{llrrrrl}
+\toprule
+Comparison & Axis & $\Delta$ & SE & $t$ & $p$ & \\
+\midrule
+TLBSB vs SACPO (H$\to$S) & helpful & $+2.025$ & $0.417$ & $4.84$ & $<0.001$ & *** \\
+TLBSB vs SACPO (H$\to$S) & safety  & $+0.688$ & $0.161$ & $4.25$ & $<0.001$ & *** \\
+TLBSB vs V6   (H$\to$S) & helpful & $+0.370$ & $0.376$ & $0.98$ & $0.330$  & n.s.\\
+TLBSB vs V6   (H$\to$S) & safety  & $+0.239$ & $0.100$ & $2.37$ & $0.020$  & *   \\
+\midrule
+TLBSB vs SACPO (S$\to$H) & helpful & $+0.829$ & $0.401$ & $2.06$ & $0.041$ & *   \\
+TLBSB vs SACPO (S$\to$H) & safety  & $+0.265$ & $0.169$ & $1.56$ & $0.124$ & n.s.\\
+TLBSB vs V6   (S$\to$H) & helpful & $+0.124$ & $0.325$ & $0.38$ & $0.706$ & n.s.\\
+TLBSB vs V6   (S$\to$H) & safety  & $+0.035$ & $0.151$ & $0.23$ & $0.820$ & n.s.\\
+\midrule
+TLBSB vs SACPO (H$\to$M) & helpful & $-0.152$ & $0.376$ & $-0.40$ & $0.687$ & n.s.\\
+TLBSB vs SACPO (H$\to$M) & safety  & $+0.130$ & $0.125$ & $1.03$ & $0.306$ & n.s.\\
+TLBSB vs SACPO (S$\to$M) & helpful & $+0.225$ & $0.378$ & $0.59$ & $0.554$ & n.s.\\
+TLBSB vs SACPO (S$\to$M) & safety  & $-0.042$ & $0.075$ & $-0.56$ & $0.576$ & n.s.\\
+\bottomrule
+\multicolumn{7}{l}{$^{*}p<0.05$;\quad $^{**}p<0.01$;\quad $^{***}p<0.001$}
+\end{tabular}
+\end{table}
