@@ -34,9 +34,8 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
 )
-from trl import DPOTrainer
+from trl import DPOTrainer, DPOConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -275,7 +274,7 @@ def main():
     train_ds = build_bfpo_dataset(args.data_dir, args.data_files, args.safety_files)
 
     # ── training args ─────────────────────────────────────────────────────────
-    training_args = TrainingArguments(
+    training_args = DPOConfig(
         output_dir=args.output_dir,
         num_train_epochs=args.num_train_epochs,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -291,17 +290,17 @@ def main():
         seed=args.seed,
         report_to="none",
         dataloader_num_workers=4,
+        beta=args.beta,
+        max_length=args.max_length,
+        max_prompt_length=args.max_prompt_length,
     )
 
     trainer = BFPOTrainer(
         model=model,
         ref_model=ref_model,
         args=training_args,
-        beta=args.beta,
         train_dataset=train_ds,
         tokenizer=tokenizer,
-        max_length=args.max_length,
-        max_prompt_length=args.max_prompt_length,
         b1=args.b1,
         alpha=args.alpha,
     )
