@@ -23,7 +23,6 @@ import argparse
 import json
 import logging
 import os
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
@@ -189,6 +188,9 @@ class SafeDPOTrainer(DPOTrainer):
 
     Loss: -log σ(β*(log_ratio_chosen - log_ratio_rejected) - h_rejected * Δ)
     where h_rejected=1 when the rejected response is unsafe.
+
+    h_rejected is injected via tokenize_row so it survives dataset processing
+    in TRL >= 0.9 (which removed DPODataCollatorWithPadding).
     """
 
     def __init__(self, *args, safety_margin: float = 5.0, **kwargs):
@@ -196,8 +198,12 @@ class SafeDPOTrainer(DPOTrainer):
         self.safety_margin = safety_margin
         self._h_rejected_batch: Optional[torch.Tensor] = None
 
+    def tokenize_row(self, feature, *args, **kwargs):
+        result = super().tokenize_row(feature, *args, **kwargs)
+        result["h_rejected"] = feature.get("h_rejected", 0)
+        return result
+
     def get_batch_loss_metrics(self, model, batch, train_eval="train"):
-        # Stash h_rejected so dpo_loss can see it
         self._h_rejected_batch = batch.pop("h_rejected", None)
         result = super().get_batch_loss_metrics(model, batch, train_eval)
         self._h_rejected_batch = None
@@ -218,30 +224,12 @@ class SafeDPOTrainer(DPOTrainer):
         # Safety margin: push separation wider when rejected is unsafe
         if self._h_rejected_batch is not None and self.safety_margin > 0:
             h = self._h_rejected_batch.float().to(logits.device)
-            # Ensure shape matches
             if h.shape != logits.shape:
                 h = h[: logits.shape[0]]
             logits = logits - h * self.safety_margin
 
         losses = -F.logsigmoid(logits)
         return losses, chosen_rewards.detach(), rejected_rewards.detach()
-
-
-# ── data collator that keeps h_rejected ──────────────────────────────────────
-
-from trl import DPODataCollatorWithPadding   # noqa: E402  (after trl import above)
-from dataclasses import dataclass as dc
-from typing import Any
-
-@dc
-class SafeDPOCollator(DPODataCollatorWithPadding):
-    """Passes h_rejected through to the batch unchanged."""
-
-    def __call__(self, features):
-        h_rejected = [f.pop("h_rejected", 0) for f in features]
-        batch = super().__call__(features)
-        batch["h_rejected"] = torch.tensor(h_rejected, dtype=torch.long)
-        return batch
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -266,9 +254,9 @@ def parse_args():
     p.add_argument("--num_train_epochs", type=int, default=1)
     p.add_argument("--per_device_train_batch_size", type=int, default=4)
     p.add_argument("--gradient_accumulation_steps", type=int, default=4)
-    p.add_argument("--learning_rate", type=float, default=5e-4)
+    p.add_argument("--learning_rate", type=float, default=1e-4)
     p.add_argument("--max_length", type=int, default=512)
-    p.add_argument("--max_prompt_length", type=int, default=256)
+    p.add_argument("--max_prompt_length", type=int, default=128)
     p.add_argument("--lora_r", type=int, default=64)
     p.add_argument("--lora_alpha", type=int, default=16)
     p.add_argument("--load_in_4bit", action="store_true", default=True)
@@ -349,14 +337,6 @@ def main():
         dataloader_num_workers=4,
     )
 
-    collator = SafeDPOCollator(
-        tokenizer=tokenizer,
-        max_length=args.max_length,
-        max_prompt_length=args.max_prompt_length,
-        label_pad_token_id=-100,
-        padding_value=tokenizer.pad_token_id,
-    )
-
     trainer = SafeDPOTrainer(
         model=model,
         ref_model=ref_model,
@@ -364,7 +344,6 @@ def main():
         beta=args.beta,
         train_dataset=train_ds,
         tokenizer=tokenizer,
-        data_collator=collator,
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,
         safety_margin=args.safety_margin,

@@ -25,12 +25,10 @@ import argparse
 import json
 import logging
 import os
-from dataclasses import dataclass as dc
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import torch
-import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForCausalLM,
@@ -38,7 +36,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
 )
-from trl import DPOTrainer, DPODataCollatorWithPadding
+from trl import DPOTrainer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -127,6 +125,9 @@ class BFPOTrainer(DPOTrainer):
     logits      = beta * (delta_logp_chosen - delta_logp_rejected)
     safe_factor = b1*b3 * is_chosen_safe - b3 * is_rejected_safe - alpha
     b3 = 1 / (b1 - 1)
+
+    Safety labels are injected via tokenize_row so they survive dataset
+    processing in TRL >= 0.9 (which removed DPODataCollatorWithPadding).
     """
 
     def __init__(self, *args, b1: float = 3.0, alpha: float = 0.5, **kwargs):
@@ -136,6 +137,12 @@ class BFPOTrainer(DPOTrainer):
         self.b3 = 1.0 / (b1 - 1.0)
         self._safe_chosen_batch: Optional[torch.Tensor] = None
         self._safe_rejected_batch: Optional[torch.Tensor] = None
+
+    def tokenize_row(self, feature, *args, **kwargs):
+        result = super().tokenize_row(feature, *args, **kwargs)
+        result["is_chosen_safe"] = feature.get("is_chosen_safe", 1)
+        result["is_rejected_safe"] = feature.get("is_rejected_safe", 1)
+        return result
 
     def get_batch_loss_metrics(self, model, batch, train_eval="train"):
         self._safe_chosen_batch = batch.pop("is_chosen_safe", None)
@@ -175,21 +182,6 @@ class BFPOTrainer(DPOTrainer):
         losses = (logits - target) ** 2
 
         return losses, chosen_rewards.detach(), rejected_rewards.detach()
-
-
-# ── Data collator ─────────────────────────────────────────────────────────────
-
-@dc
-class BFPOCollator(DPODataCollatorWithPadding):
-    """Passes BFPO safety labels through to the batch unchanged."""
-
-    def __call__(self, features):
-        sc = [f.pop("is_chosen_safe", 1) for f in features]
-        sr = [f.pop("is_rejected_safe", 1) for f in features]
-        batch = super().__call__(features)
-        batch["is_chosen_safe"] = torch.tensor(sc, dtype=torch.long)
-        batch["is_rejected_safe"] = torch.tensor(sr, dtype=torch.long)
-        return batch
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -301,14 +293,6 @@ def main():
         dataloader_num_workers=4,
     )
 
-    collator = BFPOCollator(
-        tokenizer=tokenizer,
-        max_length=args.max_length,
-        max_prompt_length=args.max_prompt_length,
-        label_pad_token_id=-100,
-        padding_value=tokenizer.pad_token_id,
-    )
-
     trainer = BFPOTrainer(
         model=model,
         ref_model=ref_model,
@@ -316,7 +300,6 @@ def main():
         beta=args.beta,
         train_dataset=train_ds,
         tokenizer=tokenizer,
-        data_collator=collator,
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,
         b1=args.b1,
