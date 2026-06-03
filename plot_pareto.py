@@ -122,8 +122,7 @@ def draw_frontier(ax, xs, ys):
             linestyle="--", zorder=1)
 
 
-ARROW_PROPS = dict(arrowstyle="-", color="#888888",
-                   lw=0.8, shrinkA=4, shrinkB=4)
+ARROW_PROPS = dict(arrowstyle="-", color="#888888", lw=0.8)
 
 
 def plot_panel(ax, data, keys, panel_title, anno_cfg,
