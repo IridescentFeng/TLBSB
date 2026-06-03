@@ -144,8 +144,12 @@ class BFPOTrainer(DPOTrainer):
         return result
 
     def get_batch_loss_metrics(self, model, batch, train_eval="train"):
-        self._safe_chosen_batch = batch.pop("is_chosen_safe", None)
-        self._safe_rejected_batch = batch.pop("is_rejected_safe", None)
+        sc = batch.pop("is_chosen_safe", None)
+        sr = batch.pop("is_rejected_safe", None)
+        if sc is not None:
+            self._safe_chosen_batch = sc if isinstance(sc, torch.Tensor) else torch.tensor(sc)
+        if sr is not None:
+            self._safe_rejected_batch = sr if isinstance(sr, torch.Tensor) else torch.tensor(sr)
         result = super().get_batch_loss_metrics(model, batch, train_eval)
         self._safe_chosen_batch = None
         self._safe_rejected_batch = None

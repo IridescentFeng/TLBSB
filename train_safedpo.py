@@ -203,7 +203,9 @@ class SafeDPOTrainer(DPOTrainer):
         return result
 
     def get_batch_loss_metrics(self, model, batch, train_eval="train"):
-        self._h_rejected_batch = batch.pop("h_rejected", None)
+        h = batch.pop("h_rejected", None)
+        if h is not None:
+            self._h_rejected_batch = h if isinstance(h, torch.Tensor) else torch.tensor(h)
         result = super().get_batch_loss_metrics(model, batch, train_eval)
         self._h_rejected_batch = None
         return result
