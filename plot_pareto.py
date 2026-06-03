@@ -71,8 +71,8 @@ H_ANNO = {
     "SACPO_HtoS":       ( 0.08,  0.00, "left",  "center", False),
     "V6_HtoM":          (-0.10,  0.22, "right", "bottom", True),
     "X1_HtoM":          ( 0.06,  0.22, "left",  "bottom", True),
-    "SACPO_HtoM":       ( 0.10, -0.22, "left",  "top",    True),
-    "V6_HtoS":          ( 0.28, -0.22, "left",  "top",    True),
+    "SACPO_HtoM":       (-0.65, -0.15, "right", "top",    True),
+    "V6_HtoS":          ( 0.10, -0.30, "left",  "top",    True),
     "X1_HtoS":          ( 0.08,  0.00, "left",  "center", False),
 }
 S_ANNO = {
