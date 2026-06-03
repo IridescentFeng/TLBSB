@@ -136,7 +136,11 @@ def load_model(base_model_path: str, checkpoint_path: str):
     model.safety_critic = nn.Linear(hidden_size, 1).to(model.device)
 
     ckpt = Path(checkpoint_path)
-    candidates = [ckpt / "policy.pt", ckpt.parent / "LATEST" / "policy.pt"]
+    # Accept either a .pt file path or a directory containing policy.pt
+    if ckpt.suffix == ".pt" and ckpt.exists():
+        candidates = [ckpt]
+    else:
+        candidates = [ckpt / "policy.pt", ckpt.parent / "LATEST" / "policy.pt"]
     loaded = False
     for p in candidates:
         if p.exists():
@@ -155,6 +159,30 @@ def load_model(base_model_path: str, checkpoint_path: str):
 
     model.eval()
     return model, tokenizer
+
+
+def _merge_subwords(tokens, scores, strategy="max"):
+    """Merge BPE subword pieces into whole words.
+
+    BPE word boundaries: a token that starts with a space (or newline) begins
+    a new word. Consecutive tokens without a leading space are continuations.
+    Each merged word gets the max score of its constituent subwords.
+    """
+    if not tokens:
+        return [], []
+    merged_t, merged_s = [], []
+    buf_tok, buf_sc = tokens[0], [scores[0]]
+    for tok, sc in zip(tokens[1:], scores[1:]):
+        if tok.startswith(" ") or tok in ("\n", ""):
+            merged_t.append(buf_tok.lstrip(" "))
+            merged_s.append(max(buf_sc) if strategy == "max" else sum(buf_sc) / len(buf_sc))
+            buf_tok, buf_sc = tok, [sc]
+        else:
+            buf_tok += tok
+            buf_sc.append(sc)
+    merged_t.append(buf_tok.lstrip(" "))
+    merged_s.append(max(buf_sc) if strategy == "max" else sum(buf_sc) / len(buf_sc))
+    return merged_t, merged_s
 
 
 def get_token_scores(model, tokenizer, prompt: str, max_new_tokens: int = 40):
@@ -196,9 +224,9 @@ def get_token_scores(model, tokenizer, prompt: str, max_new_tokens: int = 40):
         h = torch.sigmoid(v).item()
         scores.append(h)
 
-    # Trim to same length
+    # Trim to same length, then merge BPE subword pieces into whole words
     n = min(len(token_strings), len(scores))
-    return token_strings[:n], scores[:n]
+    return _merge_subwords(token_strings[:n], scores[:n])
 
 
 # ── Figure drawing ────────────────────────────────────────────────────────────
