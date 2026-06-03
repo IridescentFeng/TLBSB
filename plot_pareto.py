@@ -1,8 +1,10 @@
 """
-Pareto plot for TLBSB paper.
+Pareto plot for TLBSB paper — two-panel layout.
+  Left panel:  all H→* methods (HtoS, HtoM)
+  Right panel: all S→* methods (StoH, StoM)
+
 Usage:
     python plot_pareto.py --data x1_bs_pareto_pku.json --output pareto.pdf
-    python plot_pareto.py --data x1_bs_pareto_pku.json --output pareto.png --no_baseline
 """
 
 import json
@@ -23,40 +25,57 @@ matplotlib.rcParams.update({
     "ytick.direction":   "out",
     "xtick.major.width": 1.2,
     "ytick.major.width": 1.2,
-    "xtick.minor.visible": False,
-    "ytick.minor.visible": False,
-    "pdf.fonttype":      42,   # embeds fonts in PDF
+    "pdf.fonttype":      42,
     "ps.fonttype":       42,
 })
 
-# ── per-method display config ──────────────────────────────────────────────────
-# (label, face_color, edge_color, marker, marker_size, zorder, label_dx, label_dy)
-STYLE = {
-    "X1_HtoS":  ("TLBSB H→S",  "#D94F00", "#D94F00", "o", 130, 6,  0.08, -0.45),
-    "X1_StoH":  ("TLBSB S→H",  "#D94F00", "#D94F00", "o", 130, 6,  0.08,  0.20),
-    "X1_HtoM":  ("TLBSB H→M",  "#FF8C55", "#D94F00", "o", 130, 6, -0.45,  0.20),
-    "X1_StoM":  ("TLBSB S→M",  "#FF8C55", "#D94F00", "o", 130, 6, -0.52, -0.45),
-    "SACPO_HtoS": ("SACPO H→S","#2A6DB5", "#2A6DB5", "s", 130, 5,  0.08, -0.45),
-    "SACPO_StoH": ("SACPO S→H","#2A6DB5", "#2A6DB5", "s", 130, 5,  0.08,  0.20),
-    "SACPO_HtoM": ("SACPO H→M","#7CB9E8", "#2A6DB5", "s", 130, 5, -0.52,  0.20),
-    "SACPO_StoM": ("SACPO S→M","#7CB9E8", "#2A6DB5", "s", 130, 5,  0.08,  0.20),
-    "V6_HtoS":  ("V6 H→S",     "#6A4C9C", "#6A4C9C", "^", 120, 4,  0.08,  0.20),
-    "V6_StoH":  ("V6 S→H",     "#6A4C9C", "#6A4C9C", "^", 120, 4,  0.08, -0.45),
-    "Helpful_baseline": ("π_r","#555555", "#555555", "o", 110, 3,  0.08,  0.20),
-    "Safety_baseline":  ("π_s","#555555", "#555555", "D", 110, 3,  0.08,  0.20),
+# ── color / marker definitions ────────────────────────────────────────────────
+COLOR = {
+    "X1":    ("#D94F00", "#D94F00"),   # (facecolor, edgecolor)
+    "SACPO": ("#2A6DB5", "#2A6DB5"),
+    "V6":    ("#6A4C9C", "#6A4C9C"),
+    "base":  ("#777777", "#777777"),
+}
+MARKER = {
+    "toS": "o",   # →S  (pure safety)
+    "toH": "o",   # →H  (pure helpful)
+    "toM": "D",   # →M  (mixed)
+}
+MS = 120   # marker size
+
+# ── per-method config ─────────────────────────────────────────────────────────
+# key: (family, dest, display_label, label_dx, label_dy)
+META = {
+    "X1_HtoS":   ("X1",    "toS", "TLBSB H→S",   0.06, -0.50),
+    "X1_HtoM":   ("X1",    "toM", "TLBSB H→M",   0.06,  0.25),
+    "X1_StoH":   ("X1",    "toH", "TLBSB S→H",   0.06,  0.25),
+    "X1_StoM":   ("X1",    "toM", "TLBSB S→M",   0.06, -0.50),
+    "SACPO_HtoS":("SACPO", "toS", "SACPO H→S",   0.06, -0.50),
+    "SACPO_HtoM":("SACPO", "toM", "SACPO H→M",   0.06,  0.25),
+    "SACPO_StoH":("SACPO", "toH", "SACPO S→H",   0.06,  0.25),
+    "SACPO_StoM":("SACPO", "toM", "SACPO S→M",   0.06, -0.50),
+    "V6_HtoS":   ("V6",    "toS", "V6 H→S",      0.06,  0.25),
+    "V6_HtoM":   ("V6",    "toM", "V6 H→M",      0.06, -0.50),
+    "V6_StoH":   ("V6",    "toH", "V6 S→H",      0.06,  0.25),
+    "V6_StoM":   ("V6",    "toM", "V6 S→M",      0.06, -0.50),
+    "Helpful_baseline": ("base", "toS", "π_r (init)", 0.06, 0.25),
+    "Safety_baseline":  ("base", "toH", "π_s (init)", 0.06, 0.25),
 }
 
-# legend group order
-LEGEND_GROUPS = [
-    ("TLBSB (ours)", ["X1_HtoS", "X1_StoH", "X1_HtoM", "X1_StoM"]),
-    ("SACPO",        ["SACPO_HtoS", "SACPO_StoH", "SACPO_HtoM", "SACPO_StoM"]),
-    ("V6 (ablation)",["V6_HtoS", "V6_StoH"]),
-    ("Baselines",    ["Helpful_baseline", "Safety_baseline"]),
-]
+# which keys go in each panel
+PANELS = {
+    "H→*": ["Helpful_baseline",
+             "X1_HtoS", "X1_HtoM",
+             "SACPO_HtoS", "SACPO_HtoM",
+             "V6_HtoS", "V6_HtoM"],
+    "S→*": ["Safety_baseline",
+             "X1_StoH", "X1_StoM",
+             "SACPO_StoH", "SACPO_StoM",
+             "V6_StoH", "V6_StoM"],
+}
 
 
 def pareto_frontier(points):
-    """Return indices of Pareto-optimal points (maximise both axes)."""
     pts = np.array(points)
     n = len(pts)
     dominated = np.zeros(n, dtype=bool)
@@ -64,147 +83,150 @@ def pareto_frontier(points):
         for j in range(n):
             if i == j:
                 continue
-            if pts[j, 0] >= pts[i, 0] and pts[j, 1] >= pts[i, 1] and (
-                    pts[j, 0] > pts[i, 0] or pts[j, 1] > pts[i, 1]):
+            if (pts[j, 0] >= pts[i, 0] and pts[j, 1] >= pts[i, 1] and
+                    (pts[j, 0] > pts[i, 0] or pts[j, 1] > pts[i, 1])):
                 dominated[i] = True
                 break
     idx = np.where(~dominated)[0]
-    idx = idx[np.argsort(pts[idx, 0])]  # sort by x for line drawing
-    return idx
+    return idx[np.argsort(pts[idx, 0])]
 
 
-def draw_pareto_line(ax, data, methods_in_data):
-    xs = [data[m]["x"] for m in methods_in_data]
-    ys = [data[m]["y"] for m in methods_in_data]
+def draw_frontier(ax, xs, ys):
     pts = list(zip(xs, ys))
     idx = pareto_frontier(pts)
     px = [pts[i][0] for i in idx]
     py = [pts[i][1] for i in idx]
-    ax.plot(px, py, color="#AAAAAA", linewidth=1.4,
-            linestyle="--", zorder=1, label="Pareto frontier")
+    ax.plot(px, py, color="#BBBBBB", linewidth=1.4,
+            linestyle="--", zorder=1)
 
 
-def plot_pareto(data_path, output_path, no_baseline=False,
-                xlabel="Helpful reward (mean ± SE)  →  more helpful",
-                ylabel="Safety score (mean ± SE)  →  safer",
-                title=None):
-
-    with open(data_path) as f:
-        data = json.load(f)
-
-    fig, ax = plt.subplots(figsize=(7.2, 5.8))
+def plot_panel(ax, data, keys, panel_title,
+               xlabel="Helpful reward (mean ± SE)",
+               ylabel="Safety score (mean ± SE)"):
     ax.set_facecolor("#FAFAFA")
-    ax.grid(True, color="#E0E0E0", linewidth=0.8, zorder=0)
+    ax.grid(True, color="#E2E2E2", linewidth=0.8, zorder=0)
+    ax.set_title(panel_title, fontsize=13, fontweight="bold", pad=8)
+    ax.set_xlabel(xlabel, fontsize=10.5, labelpad=5)
+    ax.set_ylabel(ylabel, fontsize=10.5, labelpad=5)
+    ax.tick_params(labelsize=9.5)
 
+    present = [k for k in keys if k in data and k in META]
     baseline_keys = {"Helpful_baseline", "Safety_baseline"}
-    active = {k: v for k, v in data.items()
-              if k in STYLE and (not no_baseline or k not in baseline_keys)}
+    frontier_keys = [k for k in present if k not in baseline_keys]
 
-    # Pareto frontier (exclude baselines from frontier)
-    frontier_methods = [k for k in active if k not in baseline_keys]
-    if frontier_methods:
-        draw_pareto_line(ax, data, frontier_methods)
+    # Pareto frontier
+    if frontier_keys:
+        xs = [data[k]["x"] for k in frontier_keys]
+        ys = [data[k]["y"] for k in frontier_keys]
+        draw_frontier(ax, xs, ys)
 
-    # plot points + error bars
-    for key, vals in active.items():
-        if key not in STYLE:
-            continue
-        label, fc, ec, mk, ms, zo, dx, dy = STYLE[key]
+    # points
+    for key in present:
+        vals = data[key]
+        fam, dest, label, dx, dy = META[key]
+        fc, ec = COLOR[fam]
+        mk = MARKER[dest]
         x, y   = vals["x"], vals["y"]
         xe, ye = vals.get("x_se", 0), vals.get("y_se", 0)
 
+        zo = 2 if fam == "base" else 4
+        alpha_err = 0.5 if fam == "base" else 0.75
+
         ax.errorbar(x, y, xerr=xe, yerr=ye,
-                    fmt="none", ecolor=ec, elinewidth=1.0,
-                    capsize=3, capthick=1.0, zorder=zo - 1, alpha=0.7)
+                    fmt="none", ecolor=ec, elinewidth=0.9,
+                    capsize=3, capthick=0.9, zorder=zo - 1, alpha=alpha_err)
 
-        ax.scatter(x, y, s=ms, marker=mk,
-                   facecolors=fc, edgecolors=ec,
-                   linewidths=1.2, zorder=zo)
+        ax.scatter(x, y, s=MS, marker=mk,
+                   facecolors=fc if fam != "base" else "none",
+                   edgecolors=ec, linewidths=1.4, zorder=zo)
 
-        # annotation
         ax.annotate(
             label, xy=(x, y), xytext=(x + dx, y + dy),
-            fontsize=9.5, color="#222222",
-            ha="left", va="center",
+            fontsize=8.8, color="#1a1a1a", ha="left", va="center",
             path_effects=[pe.withStroke(linewidth=2.5, foreground="white")],
         )
 
-    # ── legend ────────────────────────────────────────────────────────────────
-    legend_handles = []
-    for group_name, keys in LEGEND_GROUPS:
-        present = [k for k in keys if k in active]
-        if not present:
+
+def build_legend():
+    """Shared legend entries."""
+    handles = []
+
+    # family colors
+    handles.append(Line2D([0], [0], linestyle="none", marker="none",
+                          label="$\\bf{Method}$"))
+    for fam, (fc, ec) in COLOR.items():
+        if fam == "base":
             continue
-        # group header (invisible spacer)
-        legend_handles.append(
-            Line2D([0], [0], linestyle="none", marker="none",
-                   label=f"$\\bf{{{group_name}}}$")
-        )
-        seen_shapes = {}
-        for k in present:
-            lbl, fc, ec, mk, ms, *_ = STYLE[k]
-            shape_key = (mk, fc)
-            if shape_key in seen_shapes:
-                continue
-            seen_shapes[shape_key] = True
-            legend_handles.append(
-                Line2D([0], [0], linestyle="none",
-                       marker=mk, markersize=7,
-                       markerfacecolor=fc, markeredgecolor=ec,
-                       markeredgewidth=1.2, label=lbl)
-            )
+        name = {"X1": "TLBSB (ours)", "SACPO": "SACPO", "V6": "V6 (ablation)"}[fam]
+        handles.append(Line2D([0], [0], linestyle="none",
+                               marker="o", markersize=8,
+                               markerfacecolor=fc, markeredgecolor=ec,
+                               markeredgewidth=1.3, label=name))
 
-    # pareto line entry
-    legend_handles.append(
-        Line2D([0], [0], color="#AAAAAA", linewidth=1.4,
-               linestyle="--", label="Pareto frontier")
-    )
+    # baseline
+    handles.append(Line2D([0], [0], linestyle="none",
+                           marker="o", markersize=8,
+                           markerfacecolor="none", markeredgecolor="#777777",
+                           markeredgewidth=1.3, label="Init baseline (π_r / π_s)"))
 
-    ax.legend(handles=legend_handles,
-              loc="lower left", fontsize=8.5,
-              framealpha=0.92, edgecolor="#CCCCCC",
-              handlelength=1.5, handletextpad=0.6,
-              borderpad=0.7, labelspacing=0.35)
+    # marker shapes
+    handles.append(Line2D([0], [0], linestyle="none", marker="none",
+                          label="$\\bf{Stage\\;2\\;data}$"))
+    handles.append(Line2D([0], [0], linestyle="none",
+                           marker="o", markersize=8,
+                           markerfacecolor="#888888", markeredgecolor="#888888",
+                           label="Pure (→S / →H)"))
+    handles.append(Line2D([0], [0], linestyle="none",
+                           marker="D", markersize=7,
+                           markerfacecolor="#888888", markeredgecolor="#888888",
+                           label="Mixed (→M)"))
 
-    ax.set_xlabel(xlabel, fontsize=11, labelpad=6)
-    ax.set_ylabel(ylabel, fontsize=11, labelpad=6)
-    if title:
-        ax.set_title(title, fontsize=12, pad=10)
-
-    ax.tick_params(labelsize=10)
-    fig.tight_layout(pad=1.5)
-
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
-    print(f"Saved: {output_path}")
-
-    # also save companion format
-    if output_path.endswith(".pdf"):
-        fig.savefig(output_path.replace(".pdf", ".png"), dpi=300, bbox_inches="tight")
-        print(f"Saved: {output_path.replace('.pdf', '.png')}")
-    elif output_path.endswith(".png"):
-        fig.savefig(output_path.replace(".png", ".pdf"), dpi=300, bbox_inches="tight")
-        print(f"Saved: {output_path.replace('.png', '.pdf')}")
-
-    plt.close(fig)
+    # pareto line
+    handles.append(Line2D([0], [0], color="#BBBBBB", linewidth=1.4,
+                           linestyle="--", label="Pareto frontier"))
+    return handles
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data",        default="x1_bs_pareto_pku.json",
-                        help="Pareto data JSON ({method: {x, x_se, y, y_se}})")
-    parser.add_argument("--output",      default="pareto.pdf")
-    parser.add_argument("--xlabel",      default="Helpful reward (mean ± SE)  →  more helpful")
-    parser.add_argument("--ylabel",      default="Safety score (mean ± SE)  →  safer")
-    parser.add_argument("--title",       default=None)
-    parser.add_argument("--no_baseline", action="store_true",
-                        help="Hide π_r / π_s baseline points")
+    parser.add_argument("--data",   default="x1_bs_pareto_pku.json")
+    parser.add_argument("--output", default="pareto.pdf")
+    parser.add_argument("--ylabel", default="Safety score (mean ± SE)  →  safer")
+    parser.add_argument("--xlabel", default="Helpful reward (mean ± SE)  →  more helpful")
     args = parser.parse_args()
 
-    plot_pareto(args.data, args.output,
-                no_baseline=args.no_baseline,
-                xlabel=args.xlabel,
-                ylabel=args.ylabel,
-                title=args.title)
+    with open(args.data) as f:
+        data = json.load(f)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2))
+    fig.subplots_adjust(wspace=0.32)
+
+    for ax, (panel_title, keys) in zip(axes, PANELS.items()):
+        plot_panel(ax, data, keys, panel_title,
+                   xlabel=args.xlabel, ylabel=args.ylabel)
+
+    legend = build_legend()
+    fig.legend(handles=legend,
+               loc="lower center",
+               ncol=7,
+               fontsize=9,
+               framealpha=0.92,
+               edgecolor="#CCCCCC",
+               handlelength=1.4,
+               handletextpad=0.5,
+               columnspacing=1.0,
+               bbox_to_anchor=(0.5, -0.12))
+
+    fig.tight_layout(rect=[0, 0.08, 1, 1])
+
+    fig.savefig(args.output, dpi=300, bbox_inches="tight")
+    print(f"Saved: {args.output}")
+
+    alt = args.output.replace(".pdf", ".png") if args.output.endswith(".pdf") \
+        else args.output.replace(".png", ".pdf")
+    fig.savefig(alt, dpi=300, bbox_inches="tight")
+    print(f"Saved: {alt}")
+    plt.close(fig)
 
 
 if __name__ == "__main__":
