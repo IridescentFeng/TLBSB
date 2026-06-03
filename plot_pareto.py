@@ -77,22 +77,22 @@ META = {
 # dx/dy: data-unit offset from the point to the text anchor
 # use_arrow=True: draw a thin connector line from text to point
 H_ANNO = {
-    "Helpful_baseline": ( 0.08,  0.09, "left",  "center", False),
-    "SACPO_HtoS":       ( 0.08,  0.00, "left",  "center", False),
-    "V6_HtoM":          (-0.10,  0.22, "right", "bottom", True),
-    "X1_HtoM":          ( 0.06,  0.22, "left",  "bottom", True),
-    "SACPO_HtoM":       (-0.65, -0.15, "right", "top",    True),
-    "V6_HtoS":          ( 0.10, -0.30, "left",  "top",    True),
-    "X1_HtoS":          ( 0.08,  0.00, "left",  "center", False),
+    "Helpful_baseline": ( 0.15, -0.12, "left",  "top",    False),
+    "SACPO_HtoM":       (-0.15,  0.00, "right", "center", False),
+    "SACPO_HtoS":       (-0.15, -0.10, "right", "top",    False),
+    "V6_HtoM":          (-0.28,  0.08, "right", "bottom", True),
+    "V6_HtoS":          ( 0.12, -0.15, "left",  "top",    True),
+    "X1_HtoM":          ( 0.10,  0.22, "left",  "bottom", True),
+    "X1_HtoS":          ( 0.12,  0.00, "left",  "center", False),
 }
 S_ANNO = {
-    "Safety_baseline":  (-0.12,  0.00, "right", "center", False),
-    "SACPO_StoH":       (-0.10,  0.00, "right", "center", False),
-    "V6_StoH":          ( 0.08, -0.14, "left",  "top",    True),
-    "X1_StoH":          ( 0.08,  0.08, "left",  "bottom", False),
-    "V6_StoM":          (-0.10,  0.00, "right", "center", False),
-    "SACPO_StoM":       (-0.10,  0.17, "right", "bottom", True),
-    "X1_StoM":          (-0.20,  0.10, "right",  "bottom", True),
+    "Safety_baseline":  ( 0.10,  0.00, "left",  "center", False),
+    "SACPO_StoM":       (-0.15,  0.10, "right", "bottom", False),
+    "X1_StoM":          ( 0.12,  0.10, "left",  "bottom", True),
+    "V6_StoM":          (-0.15,  0.00, "right", "center", False),
+    "SACPO_StoH":       (-0.15,  0.00, "right", "center", False),
+    "V6_StoH":          ( 0.10, -0.12, "left",  "top",    True),
+    "X1_StoH":          ( 0.12,  0.00, "left",  "center", False),
 }
 
 # ── panel membership ──────────────────────────────────────────────────────────
@@ -245,8 +245,9 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(6.8, 3.2))
     fig.subplots_adjust(wspace=0.32)
 
-    for ax, panel_title in zip(axes, PANELS):
-        plot_panel(ax, data, panel_title, args.xlabel, args.ylabel)
+    for i, (ax, panel_title) in enumerate(zip(axes, PANELS)):
+        ylabel = args.ylabel if i == 0 else ""
+        plot_panel(ax, data, panel_title, args.xlabel, ylabel)
 
     # Align the two panels so points are visually comparable across H→* and S→*.
     xlims = [ax.get_xlim() for ax in axes]
