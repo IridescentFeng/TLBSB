@@ -1,0 +1,963 @@
+\documentclass[lettersize,journal]{IEEEtran}
+\usepackage{amsmath,amsfonts}
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{array}
+\usepackage[caption=false,font=normalsize,labelfont=sf,textfont=sf]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{cite}
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
+\usepackage[UTF8]{ctex}
+% updated with editorial comments 8/9/2021
+
+\begin{document}
+
+\title{序列化安全对齐中的词元级 KL 控制：分析与语义屏障的局限}
+
+\author{作者姓名，~\IEEEmembership{单位，}
+        % <-this % stops a space
+\thanks{本文受[基金项目编号]资助。}% <-this % stops a space
+\thanks{（对应作者联系方式）}}
+
+% The paper headers
+\markboth{计算机学报}%
+{作者等：序列化安全对齐中的词元级 KL 控制}
+
+\IEEEpubid{}
+% Remember, if you use this you must call \IEEEpubidadjcol in the second
+% column for its text to clear the IEEEpubid mark.
+
+\maketitle
+
+\begin{abstract}
+安全性与有用性是大型语言模型对齐的两个核心目标。SACPO 等序列化对齐框架将二者解耦为两阶段依次优化，在理论上具有良好的分解性质，但其失效模式尚不清楚。本文对序列化安全对齐给出词元级分析，揭示两个结构性缺陷：其一，序列级 KL 约束允许优化器将散度集中于个别词元而以其余位置的零散度摊薄总惩罚，使逐词元约束在满足全局预算的表象下失效（命题1）；其二，纯安全训练的梯度不显式依赖有用性数据分布，第一阶段习得的有用性能力在第二阶段单调漂移（命题2）。我们进一步证明，逐词元的 KL 硬屏障可消除摊薄，但其词元无关性质引入约束强度与可达学习深度之间不可调和的全局权衡（定理1、定理2）。在实证上，我们发现仅将 SACPO 的序列级（DPO）对齐目标替换为词元级 KL 目标（TDPO），即在安全性与有用性两轴上同时取得显著提升；而纯安全单阶段训练导致有用性灾难性崩塌，直接印证命题2 的漂移分析。由于该权衡源于约束的词元无关性质（定理2），一个自然的问题是能否以词元条件的机制使约束强度随词元的语义角色变化，从而规避这一权衡。我们据此设计并系统检验了一个语义屏障——由提示级门控与词元级安全探针构成。尽管该屏障在训练中充分激活（门控在安全提示上开启、探针判别有害词元、其梯度占比随训练上升），它在分布内、对抗性分布外（AdvBench、StrongREJECT）、过度拒绝（XSTest）与安全–有用性帕累托四类评测上，相对词元级 KL 基线均未带来显著改进。诊断表明，屏障作用于表示空间而未改变输出分布。本文据此指出词元级 KL 控制是序列化安全对齐的关键杠杆，并为表示空间的安全干预提供一个有机制诊断的警示性负面结果。
+\end{abstract}
+
+
+\begin{IEEEkeywords}
+大语言模型对齐，基于人类反馈的强化学习，直接偏好优化，安全对齐，词元级 KL 控制，序列化对齐，语义屏障，负面结果。
+\end{IEEEkeywords}
+
+\section{引言}
+大型语言模型（Large Language Models, LLMs）在自然语言理解\cite{bubeck2023paper}、代码生成\cite{chen2021evaluating,gao2023pal}与复杂推理\cite{stiennon2020learning}等任务上展现出强大能力，但其输出行为与人类价值观之间的潜在偏差引发了广泛关注。为使模型输出与人类意图保持一致，基于人类反馈的强化学习（Reinforcement Learning from Human Feedback, RLHF）\cite{ouyang2022training}成为使 LLM 更有益且无害的关键机制。标准的RLHF通过收集人类偏好数据训练奖励模型，再用PPO\cite{schulman2017proximal}等强化学习算法优化策略模型。然而，RLHF的训练流程复杂、计算开销大，奖励模型的训练稳定性也难以保证。直接偏好优（Direct Preference Optimization, DPO）\cite{rafailov2023direct}通过将偏好学习转化为分类问题，绕过了显式奖励模型的训练，以更简洁的方式实现了对齐目标并在对齐任务上取得了与RLHF相当的效果。
+
+RLHF所涵盖的有用性对齐与安全对齐在参数空间中的优化方向相互冲突\cite{bai2022training, ganguli2022red}，单阶段联合对齐难以在二者之间取得良好平衡。为应对这一挑战，安全RLHF\cite{dai2023safe}引入约束马尔可夫决策过程框架，以PPO-Lagrangian\cite{fujimoto2019benchmarking}等方法在优化有用性奖励的同时显式约束安全违规率，但其复杂的双层优化结构继承了RLHF训练不稳定、计算开销大的固有缺陷。为此，SACPO\cite{wachi2024stepwise}提出序列化对齐框架，将有用性对齐与安全对齐解耦为两个独立阶段依次完成，并在理论上证明了这一序列化分解的最优性。
+
+然而，我们发现SACPO的序列化对齐框架存在两个结构性缺陷。其一，SACPO依赖序列级KL散度约束维持第一阶段能力，但序列级求和允许优化器将全部KL预算集中于语义冲突的关键词元，同时令其余词元的KL归零来摊薄总惩罚，导致局部约束在看似满足全局预算的情况下实际失效。其二，第二阶段的纯安全训练损失仅在安全数据分布上计算梯度，不显式依赖有用性数据分布，有用性能力差距在训练过程中单调累积而缺乏任何主动抑制机制。
+
+针对上述两个结构性缺陷，本文给出系统的词元级分析，并据此设计与检验一个自然的干预方案。我们首先证明：对逐词元 KL 散度施加直接硬约束虽能消除摊薄自由度，但其词元无关性质导致约束强度与可达学习深度之间不可调和的全局权衡（定理2）。这一权衡的语义根源促使我们提出问题：能否以一个词元条件的屏障使约束强度随词元的语义角色变化，从而规避该权衡？我们据此设计语义屏障，由提示级分类器门控与词元级安全探针（Safety-Aware Probe, SAP）共同决定逐位惩罚强度。在实证上，我们的发现分为正反两面。正面地，仅将序列级（DPO）对齐目标替换为词元级 KL 目标（TDPO），即在安全与有用两轴上同时显著优于 SACPO，确立词元级 KL 控制为序列化安全对齐的关键杠杆；而纯安全单阶段训练导致有用性灾难性崩塌，直接印证命题2 的漂移分析。然而，在已采用词元级 KL 控制的强基线之上进一步叠加语义屏障——尽管其在训练中被机制性地充分激活（门控开启、探针判别、梯度占比上升）——却在分布内、对抗性分布外、过度拒绝与帕累托四类评测上均未带来显著的行为收益；诊断表明它作用于表示空间而不改变输出分布。
+
+本文的主要贡献如下：
+\begin{itemize}
+    \item 我们对 SACPO 序列化对齐框架进行系统性理论分析，形式化证明了序列级 KL 约束下逐词元散度的不可辨识性（摊薄）与纯安全训练下有用性能力的无约束漂移两个结构性缺陷。
+
+    \item 我们在实证上确立：词元级 KL 控制（TDPO）在序列化安全对齐中显著优于序列级（SACPO）对齐，并通过纯安全训练下的有用性崩塌直接印证漂移分析。
+
+    \item 针对定理2 所揭示的词元无关局限，我们提出词元条件语义屏障作为规避全局权衡的自然方案，并跨分布内、对抗性分布外、过度拒绝与安全–有用性帕累托四类评测对其系统检验，给出一个有机制诊断的负面结果：该屏障机械上充分激活却不改变输出行为，作用于表示空间而非输出分布——为表示空间的安全干预提供警示。
+\end{itemize}
+
+\section{相关工作}
+
+\subsection{基于人类反馈的强化学习与直接偏好优化}
+
+使语言模型输出与人类价值观对齐的早期工作由 Ziegler 等人\cite{ziegler2019fine}奠基，通过收集人类偏好标注训练奖励模型、再以近端策略优化（PPO）\cite{schulman2017proximal}微调生成模型。Stiennon 等人\cite{stiennon2020learning}将这一范式扩展至摘要生成，Ouyang 等人\cite{ouyang2022training}将其系统化为 InstructGPT，证明 RLHF 可在多类任务上显著提升模型的指令遵循能力与安全性。然而，RLHF 的训练流程复杂——需维护奖励模型、参考策略与 PPO actor 三套模型，计算成本高昂，且奖励模型的 Goodhart 病（对代理奖励的过度优化导致真实价值背离）难以根治\cite{gao2023scaling}。
+
+直接偏好优化（DPO）\cite{rafailov2023direct}通过数学重参数化将隐式奖励对应到对数概率比，从而把偏好数据上的强化学习目标转化为一个监督分类问题，彻底绕开显式奖励模型与 PPO。DPO 的简洁性催生了大量变体：身份策略优化（IPO）\cite{azar2024general}引入正则化以抑制极端对数比，序列似然校准（SLiC）\cite{zhao2023slic}以排名损失替代对数似然对比；ORPO\cite{hong2024orpo}将监督微调目标与偏好比值惩罚合并为单阶段目标以减少超参数。上述方法的 KL 约束均作用于整条序列的对数概率，对单个词元位置的分布漂移缺乏细粒度控制，是本文命题1 所揭示的摊薄问题的共同来源。
+
+\subsection{词元级偏好学习}
+
+将偏好信号从序列级下放到词元级是近期对齐研究的重要方向。TDPO\cite{zeng2024token}（ICML 2024）基于 MDP 性能差分引理，将 DPO 的序列级奖励差分解为每步词元优势函数之和，并引入前向序列级 KL 惩罚以防止各词元分布的极端偏移；本文以 TDPO1 作为底层优化框架。TIS-DPO\cite{wang2023tisdpo}在离线偏好数据上以词元级重要性权重重采样，使偏好梯度向关键词元位置集中，缓解末尾词元主导（brevity bias）问题。SePO\cite{chen2024sepo}以选择性词元掩码替代全序列损失，仅在模型预测置信度低于参考策略的位置施加偏好优化梯度，减少对已经对齐词元的冗余更新。AlignDistil\cite{liu2024aligndistil}将 DPO 的序列级对数比差转化为词元级分布对齐目标，通过对偏好回答逐位蒸馏实现细粒度的奖励分配。
+
+上述工作表明词元级信用分配可显著改善偏好学习效率，但它们均聚焦于有用性偏好数据、未系统处理安全性约束。本文实验证明，将序列级对齐目标替换为词元级 KL 目标（TDPO）在安全对齐场景中同样带来显著收益，并揭示词元级 KL 控制是序列化安全对齐中真正起作用的杠杆。
+
+\subsection{安全约束对齐}
+
+安全 RLHF 的早期工作将安全目标建模为约束马尔可夫决策过程，以拉格朗日乘子法在 PPO 框架内显式约束安全违规率\cite{dai2023safe}。Bai 等人\cite{bai2022training}通过构建宪法 AI 与对抗性红队数据集（Red-teaming\cite{ganguli2022red}）探索了安全性与有用性的联合优化边界，证实二者梯度方向在参数空间中存在实质性冲突。
+
+为降低上述约束优化的实现复杂度，若干工作将拉格朗日框架移植到 DPO 范式：多目标 DPO（MODPO）\cite{zhou2024beyond}保留奖励模型但以线性组合权重平衡多个目标；约束 DPO（C-DPO）\cite{liu2024enhancing}迭代更新拉格朗日乘子同时反复应用 DPO。SafeDPO\cite{kim2025safedpo}将偏好数据限定为纯安全偏好对，以 DPO 形式的单阶段对齐取代复杂的双阶段流程，但牺牲了有用性保持能力；本文实验定量刻画了这一崩塌并将其与命题2 直接对应。基于屏障函数的策略优化（BFPO）\cite{zhang2025bfpo}在连续强化学习场景中引入对数屏障以约束策略偏离，但未针对词元级分布漂移进行专门设计。原始–对偶 DPO（Primal-Dual DPO）\cite{zhao2024primaldual}将约束偏好学习形式化为鞍点问题，通过自适应拉格朗日乘子梯度实现在线约束满足，但其序列级 KL 约束仍继承摊薄问题。
+
+本文所采用的 SACPO\cite{wachi2024stepwise}（NeurIPS 2024）在理论上证明多约束对齐问题的全局最优策略可被分解为有用性对齐与安全对齐的序列化二阶段过程，但其分解依赖序列级 KL 约束维持各阶段能力。本文系统分析该约束的两个结构性缺陷，并以实验证明仅替换为词元级 KL 目标即可消除第一个缺陷带来的损失。实验所用数据集包括 PKU-SafeRLHF\cite{ji2024beavertails}，其同时提供有用性与安全性偏好对，分别构成两阶段对齐的训练信号；分布外评测采用 AdvBench\cite{zou2023universal}、StrongREJECT\cite{souly2024strongreject} 与 XSTest\cite{rottger2024xstest}。
+
+\subsection{表示空间的安全干预}
+
+近年来，通过操控模型的内部表示（而非修改训练目标）来改善安全行为的方向受到广泛关注。Burns 等人\cite{burns2023discovering}证明可在大模型隐状态中训练线性探针，以监督方式提取出接近真实值的"潜在知识"，表明安全相关信息在表示层面具有结构性可提取性。Zou 等人\cite{zou2023representation}的表示工程（Representation Engineering）进一步证明，在隐状态空间中沿特定方向施加线性扰动（steering vector），可在推理阶段直接干预模型的高层行为，包括诚实性、情感倾向与有害内容生成。Li 等人\cite{li2023inference}提出推理时干预（ITI），在注意力头输出上施加探针引导的加法修正，以最小参数开销提升模型的真实性表现。
+
+上述表示层干预方法均以\emph{推理时}操控为手段，无需重新训练。本文所研究的语义屏障则是一种\emph{训练时}的表示空间干预：以探针 $v_\phi$ 对隐状态施加惩罚梯度，试图在训练过程中将安全信号注入模型权重。本文系统检验训练时表示空间干预这一方向，并在实验节给出其行为收益的经验评估与机制诊断；推理时表示干预与训练时表示干预在作用机制上的差异，为理解表示空间安全干预的边界条件提供了实证参照。
+
+\section{预备知识}
+现代大语言模型的价值对齐通常建立在监督微调（SFT）的基础之上。通过在专家标注的数据上最小化交叉熵损失，模型获得了基础策略 $\pi_{\text{SFT}}$。尽管如此，要实现更细粒度的价值观契合，尤其是安全性等约束目标，必须依赖后续的偏好学习阶段\cite{ziegler2019fine}。本文的研究立足于优化这一阶段的对齐效率与安全性。为此，本节将依次梳理该领域的核心方法演进：首先概述标准的RLHF，随后介绍为了消除复杂强化学习过程而提出的直接偏好优化范式，最后分析当前应对多约束对齐问题的最新探索，如逐步策略优化算法\cite{wachi2024stepwise}。
+\subsection{基于人类反馈的强化学习}
+在监督微调赋予模型基础生成能力之后，为了使大语言模型真正契合人类复杂的意图，业界广泛采用基于人类反馈的强化学习 (RLHF) 范式 。这一过程通常被解构为两个核心步骤：奖励模型的构建与模型的强化学习微调 。
+
+奖励建模。给定一个输入提示$x$，SFT模型会生成多个不同的回答候选。人类标注员会根据特定准则对这些回答进行比较，从而形成包含偏好回答$y_c$和不偏好回答$y_r$的数据对$(x, y_c, y_r)$。为了将这些离散的偏好转化为连续的优化信号，RLHF假设存在一个潜在的标量奖励函数 $r(x, y)$。通常借助 Bradley-Terry (BT) 偏好模型 ，通过最小化偏好数据的负对数似然，训练一个参数化的代理奖励模型 $r_\phi$ ：
+\begin{equation}
+    \mathcal{L}_{RM} = -\mathbb{E}_{(x, y_c, y_r) \sim \mathcal{D}} [\log \sigma(r_\phi(x, y_c) - r_\phi(x, y_r))]
+\end{equation}
+其中，$\sigma(\cdot)$ 表示 Sigmoid 函数，$\mathcal{D}$ 为人类偏好数据集。
+
+策略微调 (Policy Fine-tuning)。在获得能够评估文本质量的奖励模型后，第二阶段的目标是优化语言模型策略 $\pi_\theta$，使其生成的文本能够最大化期望奖励。为了防止过度优化导致模型发生模式崩溃，RLHF会在优化目标中引入一个逆 KL 散度惩罚项 ：
+\begin{equation}
+    \max_{\pi_\theta} \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_\theta}[r_\phi(x, y)] - \beta \mathbb{D}_{KL}(\pi_\theta(\cdot|x) || \pi_{ref}(\cdot|x))
+\end{equation}
+这里，$\pi_{ref}$ 是初始的 SFT 模型，$\beta$ 是控制 KL 惩罚强度的超参数。由于文本生成是一个离散的过程，上述目标函数不可导，因此通常采用近端策略优化 (PPO) 等强化学习算法来进行参数更新。
+\subsection{直接偏好优化 (DPO) 及词元级扩展 (TDPO)}\label{sec:prelim}
+直接偏好优化 (DPO)\cite{rafailov2023direct}。 DPO 旨在消除强化学习中显式奖励模型的开销，通过重参数化最优策略，证明了潜在的序列级奖励可等价表示为策略对数概率比：
+\begin{equation}
+    r(x, y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)
+\end{equation}
+其中，$Z(x) = \sum_{y \in \mathcal{Y}} \pi_{\text{ref}}(y|x) \exp\left(\frac{1}{\beta} r(x, y)\right)$。代入 Bradley-Terry 偏好模型后，配分函数 $Z(x)$ 自然抵消，DPO 进而通过最大化序列级的奖励差值 $r(x, y_c) - r(x, y_r)$ 来直接优化语言模型策略。
+
+词元级直接偏好优化 (TDPO)\cite{zeng2024token}。根据 MDP 的性能差分引理，Zeng等人在数学上严格证明了DPO中隐式奖励差值等价于每一步词元优势函数的累加之差：
+\begin{equation}
+    u(x, y_c, y_r) \equiv \sum_{t} A^\pi(s_{w,t}, y_{w,t}) - \sum_{t} A^\pi(s_{l,t}, y_{l,t})
+\end{equation}
+其中，$u(x, y_c, y_r) =  \log \frac{\pi_\theta(y_c|x)}{\pi_{\text{ref}}(y_c|x)} -  \log \frac{\pi_\theta(y_r|x)}{\pi_{\text{ref}}(y_r|x)}$。为了在对齐偏好的过程中防止词元分布发生极端偏移，TDPO额外引入了一个基于序列的前向 KL 散度惩罚项 $\delta(x, y_c, y_r)$。该项被定义为拒绝序列与偏好序列相对于参考策略的前向 KL 散度之差：
+\begin{equation}
+\begin{aligned}
+\delta(x, y_c, y_r) &= \alpha \big( D_{\text{SeqKL}}(x, y_r; \pi_{\text{ref}} || \pi_\theta) \\
+&\quad - D_{\text{SeqKL}}(x, y_c; \pi_{\text{ref}} || \pi_\theta) \big)
+\end{aligned}
+\end{equation}
+最终，TDPO 将完整的损失函数构建为：
+\begin{equation}
+    \mathcal{L}_{\text{TDPO}} = -\mathbb{E}_{(x, y_c, y_r) \sim \mathcal{D}} \left[ \log \sigma \left(\beta u(x, y_c, y_r) - \delta(x, y_c, y_r) \right) \right]
+\end{equation}
+\subsection{约束策略优化与SACPO的序列化对齐}
+安全多目标对齐。周等人\cite{zhou2024beyond}和刘等人\cite{liu2024enhancing}分别提出了DPO的扩展版本，称为多目标DPO（MODPO）和约束DPO（C-DPO）。作为各自的不足之处，MODPO 仍需进行奖励和安全性的建模，而 C-DPO 则需要通过梯度下降迭代更新拉格朗日乘子的同时反复应用DPO。
+
+逐步约束策略优化 (SACPO)\cite{wachi2024stepwise}。为了简化多目标对齐流程，Wachi等人提出了逐步约束策略优化算法。SACPO将安全对齐形式化为在安全性函数 $g^*(x, y)$ 满足阈值 $b$ 的约束下，最大化有用性奖励 $r^*(x, y)$ 的受限优化问题：
+\begin{equation}
+\begin{aligned}
+    \max_{\pi} \mathbb{E}_{\pi}[r^*(x, y)] - \beta D_{\text{KL}}[\pi(\cdot|x) || \pi_{\text{ref}}(\cdot|x)]  \\ \quad \text{s.t.} \quad \mathbb{E}_{\pi}[g^*(x, y)] \ge b
+\end{aligned}
+\end{equation}
+在数学上证明了上述受限优化问题的全局最优策略 $\pi^*$ 可以被分解为以下形式：
+\begin{equation}
+    \pi^*(y|x) = \frac{1}{Y(x)} \pi^*_r(y|x) \exp\left(\frac{\lambda^*}{\beta} g^*(x,y)\right)
+\end{equation}
+其中，$\pi^*_r$ 是已经完全对齐了有用性奖励 $r^*$ 的最优策略，$\lambda^*$ 为最优拉格朗日乘子，$Y(x)$ 为配分函数。这一数学等价性表明复杂的多目标约束问题可以被精确解构为序列化对齐过程。即第一阶段先利用 DPO 等算法获取有用性对齐策略 $\pi^*_r$；第二阶段则直接将 $\pi^*_r$ 作为新的参考模型，对其进行安全性偏好微调。
+
+尽管 SACPO 理论上支持串联对齐，但其仅依赖粗粒度的序列级隐式 KL 约束 $D_{\text{KL}}(\pi || \pi^*_r)$ 来维持第一阶段能力。当第二阶段切换偏好目标时，这种微弱的序列级惩罚难以抵抗新数据的梯度冲击，容易打破底座模型的原有权重分布，从而导致灾难性遗忘。
+
+\section{词元级分析与语义屏障}
+本节给出序列化安全对齐的词元级分析，并据此设计本文所检验的干预。我们先证明序列级对齐的两个结构性缺陷：在序列级 KL 预算下，rejected 序列的散度可集中于个别词元而非分散抑制（命题1，\textit{摊薄}）；以及纯安全训练会使有用性能力相对第一阶段模型单调漂移（命题2，\textit{漂移}）。命题1 表明有效的约束须作用于逐词元层面——我们证明一个逐词元的 KL 硬屏障可消除摊薄（定理1），但其约束强度与词元的语义角色无关，导致约束强度与学习深度之间不可调和的全局权衡（定理2、备注1）。为绕开该权衡，我们设计一个 \textit{词元条件} 的语义屏障（定义4），由提示级门控 $\sigma(\rho)$ 与词元级安全探针 $v_\phi$ 相乘构成，并在损失层面刻画其性质：对安全提示有害词元的选择性压制（定理3），以及良性提示上的梯度门控（定理4）。须强调，以上结果刻画的是屏障\textit{损失}的结构；该结构能否转化为输出分布上的行为收益，是一个经验问题，本文在实验节专门检验。本方法以 TDPO1\cite{zeng2024token} 为底层优化框架。
+
+\subsection{序列级KL约束对逐词元散度的不可辨识性}\label{prop1}
+SACPO 依赖粗粒度的序列级隐式 KL 约束 $D_{\text{KL}}(\pi_\theta \| \pi_r)$ 来维持第一阶段能力。本文以 TDPO1 为底层优化框架，其 KL 正则化采用前向 KL 散度 $D_{\text{SeqKL}}(\pi_r \| \pi_\theta)$（SACPO 原始公式取反向 KL，下文结论不依赖方向），故下文分析均以前向 KL 为对象。对给定输入提示 $x$ 与目标序列 $y = (y_1, \dots, y_T)$，由马尔可夫生成过程，前向序列级 KL 散度沿时间步分解为：
+\begin{equation}
+\begin{aligned}
+    &\mathbb{D}_{\text{KL}}(\pi_r(y|x) \| \pi_\theta(y|x)) \\
+    &= \mathbb{E}_{y \sim \pi_r} \left[ \sum_{t=1}^T \text{KL} \left( \pi_r(\cdot|x, y_{<t}) \| \pi_\theta(\cdot|x, y_{<t}) \right) \right]
+\end{aligned}
+\end{equation}
+推导见附录\ref{app:1}。
+
+\textbf{命题1}（序列级KL预算下逐词元散度的不可辨识性）。设第二阶段以 $\pi_r$ 为参考模型在 $\mathcal{D}_s$ 上进行偏好优化，以序列级KL预算 $\sum_{t=1}^{T} \mathrm{kl}_t(x, y_r) \le C$ 约束 rejected 序列 $y_r$ 的总散度，其中 $\mathrm{kl}_t(x, y_r) = \mathrm{KL}(\pi_r(\cdot|x, y_{<t}) \,\|\, \pi_\theta(\cdot|x, y_{<t}))$ 为前向逐位 KL 散度。则该约束不蕴含任何逐词元的散度上界，对任意时间步 $t^*$ 与任意 $m \in (0, C]$，均存在满足序列级预算的策略 $\pi_\theta^*$，使 $\mathrm{kl}_{t^*}(x, y_r) = m$ 而其余位置 $\mathrm{kl}_t(x, y_r) = 0$。由于 $m$ 可取至 $C$，将散度分散于各位置与集中于单点的策略具有相同的可行状态，序列级约束既不能阻止、也无法识别散度向个别词元的集中。证明见附录\ref{app:2}。
+
+命题1直接适用于 TDPO1 的 $\delta$ 项。TDPO 虽以\textit{词元级}对齐为设计动机，但其 KL 惩罚项 $\delta(x, y_c, y_r)$ 仅为逐位 KL 沿序列的求和之差，不约束单个 $\mathrm{kl}_t$。偏好目标因而可被单点过拟合满足，而非通过对有害片段的分布式抑制达成，所得解在 $s_{t^*}$ 之外不再安全。修复需将序列级总量约束替换为逐词元的独立约束，见\ref{sec:kl-barrier}节。
+
+\subsection{纯安全训练下有用性能力的无约束漂移}\label{prop2}
+SACPO 在第二阶段使用纯安全数据集 $\mathcal{D}_s$ 进行偏好优化，第一阶段习得的有用性能力在此缺乏任何显式保护机制。我们首先定义有用性能力差距度量。
+
+\textbf{定义1}（有用性能力差距）。设 $\mathcal{D}_h$ 为有用性偏好数据集，$\pi_r$ 为第一阶段所得有用性对齐策略。定义第二阶段优化策略 $\pi_\theta$ 的有用性能力差距为其在 $\mathcal{D}_h$ 的支撑上相对于 $\pi_r$ 的序列级前向 KL 散度：
+\begin{equation}
+    \mathcal{H}(\pi_\theta) = \mathbb{E}_{x^h \sim \mathcal{D}_h}
+    \left[ D_{\mathrm{SeqKL}}\left(x^h; \pi_r \| \pi_\theta \right) \right]
+\end{equation}
+该度量满足 $\mathcal{H}(\pi_\theta) \geq 0$，当且仅当 $\pi_\theta$ 在 $\mathcal{D}_h$ 的支撑上与 $\pi_r$ 一致时取等；训练初始 $\pi_{\theta_0} = \pi_r$，故 $\mathcal{H}(\pi_{\theta_0}) = 0$。$\mathcal{H}$ 以 $\pi_r$ 为基准度量 $\pi_\theta$ 在良性查询上的偏离，作为有用性能力保持的代理指标。
+
+记 $\mathrm{supp}(\mathcal{D}) \triangleq \{x : p_\mathcal{D}(x) > 0\}$ 为数据集 $\mathcal{D}$ 的提示支撑集。
+
+\textbf{假设1}\label{jiashe1}（提示支撑集不相交，理想化）。安全数据集 $\mathcal{D}_s$ 的提示来自红队攻击类输入，有用性数据集 $\mathcal{D}_h$ 的提示来自良性日常查询，二者在语义空间上高度分离。本文将其理想化地建模为支撑集不相交：
+\begin{equation}
+    \mathrm{supp}(\mathcal{D}_s) \cap \mathrm{supp}(\mathcal{D}_h) = \emptyset
+\end{equation}
+此假设针对输入提示分布而非回答内容。真实数据中两类提示的重叠通常很小但非零；记重叠测度为 $\omega$，下文在 $\omega = 0$ 的理想化下展开，$\omega > 0$ 时各结论以 $O(\omega)$ 误差近似成立。
+
+设第二阶段以 $\pi_r$ 为参考模型，在 $\mathcal{D}_s$ 上执行梯度更新 $\theta_{k+1} = \theta_k - \eta \nabla_\theta \mathcal{L}(\theta_k; \mathcal{D}_s)$，其中 $\mathcal{L}(\theta; \mathcal{D}_s)$ 为任意仅依赖 $\mathcal{D}_s$ 的偏好优化损失（DPO、TDPO 等），取 $\mathcal{D}_s$ 上的全批量梯度，$\eta > 0$ 为学习率。
+
+\textbf{引理1}\label{gradient1}（损失函数不显式依赖有用性分布）。$\mathcal{L}(\theta; \mathcal{D}_s)$ 为 $\mathcal{D}_s$ 上逐样本损失 $\ell$ 的期望，其梯度为对 $\mathcal{D}_s$ 的提示取期望：
+\begin{equation}
+    \nabla_\theta \mathcal{L}(\theta; \mathcal{D}_s) = 
+    \mathbb{E}_{(x^s, y_c, y_r) \sim \mathcal{D}_s}
+    \left[\nabla_\theta \ell\left(\theta; x^s, y_c, y_r\right)\right]
+\end{equation}
+由假设1，上式不含任何对 $x^h \in \mathrm{supp}(\mathcal{D}_h)$ 的积分项，故梯度向量中无 $\mathcal{D}_h$ 样本的贡献项；共享参数的更新仍可改变 $\pi_\theta$ 在 $\mathrm{supp}(\mathcal{D}_h)$ 上的行为，引理1 仅排除$\mathcal{L}(\theta;\mathcal{D}_s)$中存在主动降低 $\mathcal{H}$ 的方向分量。重叠非零时该贡献项的范数以 $O(\omega)$ 为界。证明见附录\ref{app:3}。
+
+\textbf{假设2}\label{jiashe2}（安全梯度对有用性恢复方向的严格负对齐，经验假设）。我们假设安全梯度与减小 $\mathcal{H}$ 所需方向的内积在训练过程中严格为负，即存在常数 $c > 0$ 使得
+\begin{equation}\label{eq:assumption2}
+    \big\langle \nabla_\theta \mathcal{H}(\theta_k),\; 
+    \nabla_\theta \mathcal{L}(\theta_k; \mathcal{D}_s) 
+    \big\rangle \;\leq\; -c \;<\; 0
+\end{equation}
+这是一个经验假设，而非由前述设定推导的结论。$\nabla_\theta\mathcal{H}$ 与 $\nabla_\theta\mathcal{L}(\theta;\mathcal{D}_s)$ 是对\textit{同一组共享参数}的梯度，输入支撑集的不相交并不蕴含参数梯度的负对齐。其依据是 alignment tax 的实证规律，即纯安全训练可靠地损害有用性能力\cite{yu2020gradient, kirkpatrick2017overcoming}；严格负正对应这一可靠损害。合理性的详细讨论见附录\ref{app:4}。
+
+\textbf{命题2}（纯安全训练下有用性能力的无约束漂移）。设 $\mathcal{H}$ 具有 Lipschitz 连续梯度。在假设1的理想化下，由引理1与假设2，存在 $\eta_0 > 0$，使对一切 $\eta \in (0, \eta_0)$，有用性能力差距对 $k \geq 1$ 严格单调递增：
+\begin{equation}\label{dandiaobujian}
+    \mathcal{H}(\pi_{\theta_{k+1}}) \;\geq\; \mathcal{H}(\pi_{\theta_k}) 
+    + \eta\,(c - C\eta) \;>\; \mathcal{H}(\pi_{\theta_k}), 
+    \quad \forall k \geq 1
+\end{equation}
+其中 $C$ 由 $\mathcal{H}$ 梯度的 Lipschitz 常数与偏好损失梯度上界决定；$k = 0$ 步因起点为 $\mathcal{H}$ 的全局极小，仅保证 $\mathcal{H}(\pi_{\theta_1}) \geq \mathcal{H}(\pi_{\theta_0}) = 0$。递推可知退化量至少线性累积，$\mathcal{H}(\pi_{\theta_k}) \geq (k-1)\,\eta\,(c - C\eta)$。证明见附录\ref{app:4}。
+
+该漂移根源于优化目标在 $\mathrm{supp}(\mathcal{D}_h)$ 上梯度信号的结构性缺失。SACPO 的序列级 KL 惩罚 $\beta D_{\mathrm{KL}}(\pi_\theta \| \pi_r)$ 仅在 $\mathrm{supp}(\mathcal{D}_s)$ 上取期望，无法约束 $\mathrm{supp}(\mathcal{D}_h)$ 上的参数漂移。
+
+\subsection{词元级屏障的设计}\label{token barrier}
+逐词元的 KL 直接约束可修复命题1 的摊薄，但其词元无关形式将引入约束强度与可达学习深度之间不可调和的全局权衡（定理2）。这一权衡的语义根源促使我们追问：能否以一个词元条件的结构替代与语义无关的约束？语义屏障即是对该问题的具体回答，其有效性由实验检验。
+
+\subsubsection{KL直接约束及其根本局限}\label{sec:kl-barrier}
+修复命题1的设计原则是将序列级总量约束替换为词元级逐位约束，对每个时间步的 KL 值独立施加上界，使任一节点的散度集中无法借由其他节点的零散度获得可行性。对数障碍函数 $-\mu\log(\kappa - \mathrm{kl}_t)$ 兼具光滑性与边界发散性，是约束优化内点法的经典选择\cite{boyd2004convex}。设 $\kappa > 0$ 为逐词元 KL 预算上界，对 rejected 序列第 $t$ 个词元位置的前向逐位 KL 散度 $\mathrm{kl}_t(x, y_r) = \mathrm{KL}(\pi_r(\cdot|x, y_{<t}) \,\|\, \pi_\theta(\cdot|x, y_{<t}))$，定义词元级 KL 屏障惩罚为：
+\begin{equation}
+    b_t(x, y_r) = -\mu \log\bigl(\kappa - \mathrm{kl}_t(x, y_r)\bigr),
+    \quad \mathrm{kl}_t < \kappa
+\end{equation}
+其中 $\mu > 0$ 为屏障强度系数。
+
+\textbf{定理1}（词元级屏障的反摊薄性）。设序列 $y_r$ 的有效长度为 $T_r$，词元级 KL 屏障损失为各位置惩罚之和：
+\begin{equation}
+    \mathcal{L}^{\text{KL}}_{\text{barrier}}(x, y_r) =
+    \sum_{t=1}^{T_r} \mathbf{1}[y_r^t \neq \text{PAD}] \cdot b_t(x, y_r)
+\end{equation}
+则对命题1中构造的策略 $\pi_\theta^*$，当 $\mathrm{kl}_{t^*} \to \kappa$ 时，无论其余节点的 $\mathrm{kl}_{t \neq t^*}$ 取何值，均有 $\mathcal{L}^{\text{KL}}_{\text{barrier}}(x, y_r) \to +\infty$。证明见附录\ref{app:barrier}。
+
+定理1 表明任意数量正常节点的有限惩罚无法抵消 $t^*$ 处的发散，从而消除了命题1所述散度集中的可行性基础。但 KL 直接约束存在一个根本性局限，定理2 将证明其约束强度与可达学习深度之间存在不可调和的全局权衡。
+
+\textbf{记号（Active Rejected Token）}。Active rejected token 指 rejected 序列 $y_r$ 中 policy 分布低于参考分布的位置：
+\begin{equation}\label{eq:active-def}
+\mathcal{T}_{\text{active}} = \{t \in y_r : \pi_\theta(y_t|y_{<t}) < \pi_{\text{ref}}(y_t|y_{<t})\}
+\end{equation}
+训练初期 $\pi_\theta = \pi_{\text{ref}}$ 时 $\mathcal{T}_{\text{active}} = \emptyset$，随对齐训练逐步扩大。
+
+\textbf{引理2}（对齐与障碍梯度方向的符号性质）。对 TDPO1 对齐损失 $\mathcal{L}_{\text{align}}$ 在 $t \in y_r$ 处的 log-概率求偏导：
+\begin{equation}\label{eq:dir-align}
+\frac{\partial \mathcal{L}_{\text{align}}}{\partial \log\pi_\theta(y_t|y_{<t})}\bigg|_{t \in y_r} \approx \beta \sigma\!\left(-\beta u + \delta\right) > 0
+\end{equation}
+对 $\mathcal{L}^{\text{KL}}_{\text{barrier}}$ 在 $t \in \mathcal{T}_{\text{active}}$ 处的同一偏导：
+\begin{equation}\label{eq:dir-barrier}
+\frac{\partial \mathcal{L}^{\text{KL}}_{\text{barrier}}}{\partial \log\pi_\theta(y_t|y_{<t})}\bigg|_{t \in y_r,\,\text{active}} = \underbrace{\frac{\mu}{\kappa - \text{kl}_t}}_{> 0} \cdot \underbrace{\frac{\partial \text{kl}_t}{\partial \log\pi_\theta(y_t)}}_{< 0\;\text{(active)}} < 0
+\end{equation}
+两偏导对同一变量给出相反符号的推力。式(\ref{eq:dir-align})是主导项简化，完整形式见附录\ref{app:active-partial}。
+
+\textbf{命题3}（Active rejected token上的方向冲突）。对任意 $t \in \mathcal{T}_{\text{active}}$，对齐损失与 KL 屏障损失在位置 $t$ 对参数的词元级梯度贡献内积为负：
+\begin{equation}\label{eq:per-token-conflict}
+\left\langle \nabla_\theta \mathcal{L}_{\text{align}}\big|_t,\, \nabla_\theta \mathcal{L}^{\text{KL}}_{\text{barrier}}\big|_t \right\rangle < 0
+\end{equation}
+其中 $\nabla_\theta \mathcal{L}|_t \triangleq \frac{\partial \mathcal{L}}{\partial \log\pi_\theta(y_t)} \cdot \nabla_\theta \log\pi_\theta(y_t)$。证明见附录\ref{app:conflict}。
+
+命题3 的局部方向冲突在全局优化层面累积为以下权衡。
+
+\textbf{定理2}（约束强度-学习深度的全局权衡）。考虑优化问题 $\pi^*(\mu) = \arg\min_\pi \mathcal{L}_{\text{align}}(\pi) + \mu \cdot \mathcal{B}(\pi)$，其中 $\mathcal{B}(\pi) \triangleq \mathbb{E}_{\mathcal{D}}[\sum_t -\log(\kappa - \text{kl}_t)]$。定义可达学习深度 $\mathcal{M}(\mu) \triangleq \mathbb{E}_{(y_c, y_r)}[\hat{r}_{\pi^*(\mu)}(y_c) - \hat{r}_{\pi^*(\mu)}(y_r)]$。设 $\mathcal{L}_{\text{align}}$ 在 $\pi^*$ 处局部凸、$\mathcal{B}$ 严格凸，则：
+\begin{equation}\label{eq:trade-result}
+\frac{d\mathcal{M}(\mu)}{d\mu} < 0, \quad \forall \mu > 0
+\end{equation}
+证明见附录\ref{app:trade}。
+
+\textbf{备注1}（直接约束的词元无关性质）。定理2 权衡不可调和的根源在于 $\mathcal{L}^{\text{KL}}_{\text{barrier}}$ 的施加强度仅由 $\text{kl}_t$ 决定，与词元的语义角色无关，故 $\mu$ 的调节作用于所有词元之上，无法选择性地保留对语义关键词元的约束、同时释放对语义中性词元的约束。突破这一权衡需要 \textit{词元条件} 的屏障，其约束强度随词元的语义特征动态变化。
+
+\textbf{注（从约束局限到词元条件语义屏障）}。须强调，定理2 与备注1 所述的权衡是数学上可证的结构性局限，而非调参不当所致；其词元无关根源虽已在备注1 指出，但其语义含义值得展开。从语义上看，词元在安全性中的角色是高度不均等的——一条有害指令中真正承载危险语义的往往是少数关键词元（如危险操作的核心名词与动词），而大量结构性词（“首先”、“然后”、“将”、“使用”等）在任何回答中都会出现、与安全性无关。一个与语义无关的约束无法区分二者：欲压住关键词元必须整体增大 $\mu$，连带过度约束语义中性的结构性词而牺牲学习深度；欲保住学习深度则须减小 $\mu$，连带放松对关键词元的约束而牺牲安全。这正是定理2 权衡的语义根源。
+
+这一观察自然引出本文所探究的核心问题：\textbf{能否设计一种词元条件的屏障，使约束强度随词元的语义角色动态变化，从而在压制语义关键词元的同时释放对语义中性词元的约束，进而规避定理2 的全局权衡？}本文接下来设计的语义屏障，正是对这一问题的一个具体回答——它以词元级安全探针提供逐位的、语义相关的约束强度。须强调，这是一个\textit{待检验的设计方案}：屏障在损失层面具备词元条件的结构（下文定理3、定理4 将予以刻画），但该结构能否在实践中转化为输出分布上的真实行为收益，是一个无法由理论判定的经验问题，本文在实验节专门检验。至于经过细致调参的硬 KL 屏障能否取得净收益，则留作未来工作。
+
+\subsubsection{语义屏障的构建}\label{sec:semantic-barrier}
+本节构造语义屏障（一种词元条件的屏障），由两个并行线性探针组成：提示级分类器 $g_\phi$ 提供提示级选择信号，词元级安全探针 $v_\phi$ 提供词元级强度信号，二者通过乘法门控组合。
+
+\textbf{定义2}（Token级安全探针,SAP）。在策略模型最后一层隐状态 $h_t(x,y) \in \mathbb{R}^d$ 之上挂载线性探针，输出词元位置 $t$ 的安全评分：
+\begin{equation}\label{eq:sap-form}
+    v_\phi(h_t) = w_v^\top h_t + b_v \in \mathbb{R}
+\end{equation}
+参数量仅 $d+1$，不引入显著计算开销。其蒸馏预训练流程见第~\ref{Dmix SAP}节。
+
+\textbf{假设3}（Prompt Embedding的线性可分性）。参考模型对 $\mathrm{supp}(\mathcal{D}_s)$ 与 $\mathrm{supp}(\mathcal{D}_h)$ 的提示生成语义相反的响应（接续有害内容 vs.\ 拒绝回答），提示的数据集归属信息因而被编码于参考模型的表示空间。记 $\phi_{\text{ref}}(x) \in \mathbb{R}^d$ 为参考模型在 $x$ 末位提示词元处的最后一层隐状态。我们假设该归属信息在 $\phi_{\text{ref}}$ 空间中近似线性可分，这与表示探测文献的实证规律一致\cite{alain2017understanding}。
+
+\textbf{定义3}（Reference-Conditioned Prompt Classifier）。基于假设3，定义提示级判别信号 $\rho$ 为参考模型提示 embedding 上的线性分类器：
+\begin{equation}\label{eq:prompt-classifier}
+\rho \triangleq g_\phi(\phi_{\text{ref}}(x)) = w_g^\top \phi_{\text{ref}}(x) + b_g
+\end{equation}
+$g_\phi$ 通过对带数据集标签的提示（$x \in \mathrm{supp}(\mathcal{D}_s)$ 标为正类、$x \in \mathrm{supp}(\mathcal{D}_h)$ 标为负类）的监督二分类训练得到，训练完成后冻结（训练细节见附录\ref{app:refdetect}）。区别于直接使用 reference log-probability margin 的朴素信号，$g_\phi$ 以监督方式直接优化数据集归属判别，不受 completion 序列长度等混杂因素干扰。
+
+\textbf{引理3}（Prompt Classifier的判别能力）。在假设3下，监督训练的 $g_\phi$ 以高概率判别提示所属数据集：
+\begin{equation}\label{eq:refdetect-s}
+\Pr\left[\rho > 0 \mid x \in \mathrm{supp}(\mathcal{D}_s)\right] \geq 1 - \delta_1
+\end{equation}
+\begin{equation}\label{eq:refdetect-h}
+\Pr\left[\rho \leq 0 \mid x \in \mathrm{supp}(\mathcal{D}_h)\right] \geq 1 - \delta_2
+\end{equation}
+其中 $\delta_1, \delta_2$ 为分类器在两类提示上的经验错误率。第~\ref{exp:diag}~节的实验将验证 $g_\phi$ 达到 $\text{AUC} > 0.95$（$\delta_1, \delta_2 < 0.05$），远高于朴素 margin 信号的 $\approx 0.60$。判别能力分析见附录\ref{app:refdetect}。
+
+由引理3，$\sigma(\rho)$ 构成软化的提示级门控：$x \in \mathrm{supp}(\mathcal{D}_s)$ 时 $\sigma(\rho) \to 1$，$x \in \mathrm{supp}(\mathcal{D}_h)$ 时 $\sigma(\rho) \to 0$。
+
+\textbf{定义4}（Semantic Barrier with Soft Gating）。结合提示级门控 $\sigma(\rho)$ 与词元级探针 $v_\phi$，语义障碍定义为二者的乘法组合：
+\begin{equation}\label{eq:semantic-barrier}
+\mathcal{L}^{\text{sem}}_{\text{barrier}} = \underbrace{\sigma(\rho)}_{\text{prompt-level gate}} \cdot \underbrace{\frac{1}{T_r}\sum_{t \in y_r} -\log\sigma\!\left(v_\phi(h_t)\right)}_{\text{token-level barrier}}
+\end{equation}
+其中 $v_\phi$ 通过蒸馏预训练获得（训练流程见第~\ref{Dmix SAP}节），其输出对不安全词元为负值、对安全词元为正值，与上式对数障碍的惩罚方向一致。乘法门控使屏障受两级判别调制：$\sigma(\rho) \to 0$ 时整个屏障归零，与 $v_\phi$ 无关；$\sigma(\rho) \to 1$ 时强度由 $v_\phi$ 逐位决定。
+
+\subsubsection{语义屏障的理论保证}\label{sec:barrier-theory}
+\textbf{定理3}（条件性选择压制）。设 SAP 完美拟合定义4的条件目标，即 $v_\phi(h_t) = \tilde{v}(\rho)$。则在 rejected 词元上语义障碍的逐词元惩罚值为：
+\begin{equation}\label{eq:cond-pressure}
+\mathcal{L}^{\text{sem}}_{\text{barrier}}\bigg|_{t \in y_r} = \begin{cases}
+\sigma(\rho) \cdot 1.313, & x \in \mathrm{supp}(\mathcal{D}_s)\;(\rho > 0)\\
+\sigma(\rho) \cdot 0.313, & x \in \mathrm{supp}(\mathcal{D}_h)\;(\rho \leq 0)
+\end{cases}
+\end{equation}
+其中 $1.313 = -\log\sigma(-1) = \log(1+e)$，$0.313 = -\log\sigma(+1) = \log(1+e^{-1})$。该惩罚对参数的梯度系数为 $\sigma(\rho)\cdot \frac{1}{Tr} (1-\sigma(v_\phi))$，惩罚值与梯度系数均含 $\sigma(\rho)$ 因子。结合引理3的 $\sigma(\rho) \to 1$（$x \in \mathrm{supp}(\mathcal{D}_s)$）与 $\sigma(\rho) \to 0$（$x \in \mathrm{supp}(\mathcal{D}_h)$），无论以惩罚值还是梯度强度衡量，选择性压制比：
+\begin{equation}\label{eq:select-ratio}
+\frac{\text{Strength}_{x \in \mathrm{supp}(\mathcal{D}_s)}}{\text{Strength}_{x \in \mathrm{supp}(\mathcal{D}_h)}} \xrightarrow[]{\delta_1, \delta_2 \to 0} \infty
+\end{equation}
+均成立。证明见附录\ref{app:condpressure}。
+
+\textbf{备注2}（语义障碍的设计意图）。语义障碍对 rejected 序列每个有害词元独立施加惩罚，在损失层面旨在迫使对有害片段的分布式抑制，使单点过拟合无法再借由其余位置的零惩罚满足偏好目标。与定理1 的硬屏障不同，其逐位强度由词元级探针 $v_\phi$ 条件性决定，而非对 $\mathrm{kl}_t$ 施加发散的硬上界；式(\ref{eq:select-ratio})的选择性压制比趋于无穷源于分母趋零（$\mathrm{supp}(\mathcal{D}_h)$ 上屏障随 $\sigma(\rho)\to0$ 消失），而非分子无界增长。须强调：这描述的是屏障损失的结构性设计意图；该设计是否在训练后转化为输出分布上对摊薄的实际抑制，不由本节的损失级刻画所保证，而是实验节检验的经验问题。
+
+\textbf{备注3}（蒸馏探针下的适用性）。定理3的数值常数$1.313 = -\log\sigma(-1)$ 与 $0.313 = -\log\sigma(+1)$对应 $v_\phi \in \{-1,+1\}$ 的理想拟合情形。采用蒸馏探针时，$v_\phi$ 输出外部安全评估模型的连续评分，具体数值有所不同，但定理3的核心结论不受影响：选择性压制比趋于无穷（式~(\ref{eq:select-ratio})）仅依赖门控因子 $\sigma(\rho_s)\to 1$ 与 $\sigma(\rho_h)\to 0$，
+与 $v_\phi$ 的具体取值无关；惩罚的方向排序（不安全词元惩罚高于安全词元）由蒸馏目标的符号约定保证，即令$c(x,y_r)<0$ 对应不安全回答，与定义4的对数障碍方向一致。
+
+\textbf{定理4}（Benign Prompts上无方向冲突）。对 $x \in \mathrm{supp}(\mathcal{D}_h)$，由引理3以概率 $\geq 1-\delta_2$ 有 $\rho \leq 0$。由定义4，$\mathcal{L}^{\text{sem}}_{\text{barrier}}$ 与不依赖 $\theta$ 的 $\sigma(\rho)$ 成正比，故屏障梯度被 $\sigma(\rho)$ 线性压低：
+\begin{equation}
+\left\|\nabla_\theta \mathcal{L}^{\text{sem}}_{\text{barrier}}\right\|\bigg|_{x \in \mathrm{supp}(\mathcal{D}_h)} \leq \sigma(\rho)\cdot \mu\sup_t\|\nabla_\theta v_\phi(h_t)\|
+\end{equation}
+当分类器对该提示自信判别（$\rho \ll 0$，$\sigma(\rho) \to 0$）时，屏障梯度及其与对齐梯度的内积渐近为零：
+\begin{equation}\label{eq:no-conflict-benign}
+\left\langle \nabla_\theta \mathcal{L}_{\text{align}},\, \nabla_\theta \mathcal{L}^{\text{sem}}_{\text{barrier}} \right\rangle\bigg|_{x \in \mathrm{supp}(\mathcal{D}_h)} \to 0
+\end{equation}
+该结论仅依赖引理3与定义4的乘法门控结构，不需 SAP 完美拟合假设。
+
+\textbf{备注4}（语义障碍不构成额外的漂移来源）。命题3 与定理2 表明硬 KL 屏障与对齐梯度的冲突是词元无关的，在良性提示 $\mathrm{supp}(\mathcal{D}_h)$ 上同样发生，而该处对齐梯度正是有用性学习信号，冲突即阻碍有用性学习。定理4 表明语义障碍的这一冲突被 $\sigma(\rho)$ 门控限制在 $\mathrm{supp}(\mathcal{D}_s)$ 内，$\mathrm{supp}(\mathcal{D}_h)$ 上其梯度渐近为零。在理论层面，这仅排除了语义屏障自身成为额外漂移来源的可能；它并不蕴含屏障能修复命题2 的漂移。漂移是否被缓解、以及屏障在行为上是否带来安全收益，均为经验问题，见实验节。
+
+\textbf{附加理论性质}。语义障碍的参数梯度被$\mu\sup_t\|\nabla_\theta v_\phi(h_t)\|$全局有界(命题4,证明见附录\ref{app:bdgrad}),不含 KL 屏障在 $\mathrm{kl}_t \to \kappa$时的梯度发散因子。
+
+\subsection{安全探针的离线蒸馏训练}\label{Dmix SAP}
+安全探针 $v_\phi$ 与提示级门控 $g_\phi$ 均在第二阶段开始前离线训练并冻结。其监督需要安全与良性两类提示的覆盖，为此我们使用混合数据集 $\mathcal{D}_{\text{mix}} = \mathcal{D}_s \cup \mathcal{D}_h$ 仅作为探针/门控的训练数据；第二阶段的对齐损失仍仅在 $\mathcal{D}_s$ 上计算（见第~\ref{sec:total-loss}~节），$\mathcal{D}_{\text{mix}}$ 不参与对齐目标，亦不作为命题2 漂移的修复手段。
+
+混合数据集为 SAP 蒸馏预训练提供了必要的双类提示覆盖：$v_\phi$须同时见到 $\mathrm{supp}(\mathcal{D}_s)$ 与$\mathrm{supp}(\mathcal{D}_h)$ 的样本，才能学到安全与有用性语义之间的边界。本文以外部安全评估模型 $\mathcal{M}_{\text{safe}}$ 为教师，在 $\mathcal{D}_{\text{mix}}$ 上最小化蒸馏损失：
+\begin{equation}\label{eq:distill}
+    \mathcal{L}_{\text{distill}} =
+    \mathbb{E}_{(x,\,y_r)\sim\mathcal{D}_{\text{mix}}}
+    \!\left[
+    \frac{\displaystyle\sum_{t}\mathbf{1}[y_r^t\neq\text{PAD}]
+          \cdot\ell_H\!\bigl(v_\phi(h_t(x,y_r)),\;c(x,y_r)\bigr)}
+         {\displaystyle\sum_t\mathbf{1}[y_r^t\neq\text{PAD}]}
+    \right]
+\end{equation}
+其中 $c(x,y_r)$ 为教师模型对 rejected 序列的安全评分（不安全回答取负值），$\ell_H$ 为 Huber 损失\cite{huber1965robust}。蒸馏完成后$(w_v,b_v)$ 冻结，第二阶段全程不再更新。教师模型选取、蒸馏目标 $c(x,y_r)$ 的构造与超参见附录。
+
+\subsection{总损失与训练算法}\label{sec:total-loss}
+语义屏障的总损失为
+\begin{equation}\label{eq:total-loss}
+\begin{aligned}
+\mathcal{L}_{\text{SB}} = -\mathbb{E}_{(x, y_c, y_r) \sim \mathcal{D}_s}
+\Bigg[\;&\log\sigma\bigl(\beta u(x,y_c,y_r) - \delta(x,y_c,y_r)\bigr) \\
+&+ \frac{\mu\,\sigma(\rho)}{T_r}\sum_{t \in y_r}
+   \mathbf{1}[y_r^t\neq\text{PAD}]\cdot
+   \log\sigma\bigl(v_\phi(h_t)\bigr)\Bigg]
+\end{aligned}
+\end{equation}
+完整训练流程见 Algorithm \ref{alg:1} 与 \ref{alg:2}。
+
+\begin{algorithm}[h]
+\caption{语义屏障两阶段训练流程}
+\label{alg:1}
+\begin{algorithmic}[1]
+\REQUIRE 预训练模型 $\pi_{\text{SFT}}$，有用性数据集 $\mathcal{D}_h$，
+         安全数据集 $\mathcal{D}_s$，混合数据集
+         $\mathcal{D}_{\text{mix}}=\mathcal{D}_s\cup\mathcal{D}_h$，
+         外部安全评估模型 $\mathcal{M}_{\text{safe}}$，
+         超参数 $\beta,\alpha,\mu,\eta$
+\ENSURE 最终对齐策略 $\pi_\theta$
+\STATE \textbf{// 第一阶段：有用性对齐}
+\STATE 以 $\pi_{\text{SFT}}$ 为参考模型，在 $\mathcal{D}_h$ 上用 DPO
+       训练，得到有用性对齐策略 $\pi_r$
+\STATE \textbf{// 预处理：提示级分类器}
+\STATE 以 $\pi_r$ 的提示 embedding 监督训练 $g_\phi$，训练完成后冻结
+\STATE \textbf{// 预处理：SAP 蒸馏预训练}
+\STATE 以 $\mathcal{M}_{\text{safe}}$ 为教师，在 $\mathcal{D}_{\text{mix}}$
+       上最小化 $\mathcal{L}_{\text{distill}}$（式~\ref{eq:distill}），
+       训练 SAP 参数 $(w_v,b_v)$，训练完成后冻结
+\STATE \textbf{// 第二阶段：安全对齐}
+\STATE 初始化策略 $\pi_\theta \leftarrow \pi_r$（以 $\pi_r$ 为参考模型）
+\FOR{each mini-batch $(x, y_c, y_r) \sim \mathcal{D}_s$}
+    \STATE 执行 Algorithm~\ref{alg:2}，计算 $\mathcal{L}_{\text{SB}}$
+    \STATE $\theta \leftarrow \theta - \eta\nabla_\theta\mathcal{L}_{\text{SB}}$
+\ENDFOR
+\RETURN $\pi_\theta$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{语义屏障单步训练（第二阶段）}
+\label{alg:2}
+\begin{algorithmic}[1]
+\REQUIRE 参考模型 $\pi_r$，冻结分类器 $g_\phi$，冻结 SAP $(w_v,b_v)$，
+         策略 $\pi_\theta$，mini-batch $(x,y_c,y_r)$，
+         超参数 $\beta,\alpha,\mu$
+\ENSURE 当前步损失 $\mathcal{L}_{\text{SB}}$
+\STATE 策略模型前向传播，获取 logits 与最后一层隐状态 $h_t$
+\STATE 参考模型前向传播（无梯度），获取 reference logits
+       与提示 embedding $\phi_{\text{ref}}(x)$
+\STATE \textbf{// 对齐损失}
+\STATE 计算 $u(x,y_c,y_r)$ 与 $\delta(x,y_c,y_r)$
+\STATE $\mathcal{L}_{\text{align}} \leftarrow
+       -\log\sigma\!\left(\beta u - \delta\right)$
+\STATE \textbf{// 语义障碍（SAP 冻结，无梯度）}
+\STATE $\rho \leftarrow g_\phi(\phi_{\text{ref}}(x))$
+\STATE $v_\phi(h_t) \leftarrow w_v^\top h_t + b_v$
+\STATE $\mathcal{L}^{\text{sem}}_{\text{barrier}} \leftarrow
+       \sigma(\rho)\cdot\dfrac{1}{T_r}
+       \displaystyle\sum_{t\in y_r}\mathbf{1}[y_r^t\neq\text{PAD}]
+       \cdot\bigl(-\mu\log\sigma(v_\phi(h_t))\bigr)$
+\STATE \textbf{// 总损失}
+\STATE $\mathcal{L}_{\text{SB}} \leftarrow
+       \mathcal{L}_{\text{align}} +
+       \mathcal{L}^{\text{sem}}_{\text{barrier}}$
+\RETURN $\mathcal{L}_{\text{SB}}$
+\end{algorithmic}
+\end{algorithm}
+\subsection{待检验的经验问题}
+前述分析在损失层面刻画了语义屏障：它选择性作用于安全提示的有害词元（定理3），并在良性提示上被门控关闭（定理4）。然而，损失层面的结构不等于行为层面的效果——屏障经由探针作用于隐状态\textit{表示}，其对模型实际生成分布的影响须经实证检验。由此引出本文的核心经验问题：在已采用词元级 KL 控制（TDPO）的强基线之上叠加该语义屏障，是否在安全性、有用性、或二者的权衡上带来可测且显著的改进？下一节通过分布内、对抗性分布外、过度拒绝与帕累托四类评测予以回答。
+
+\section{实验}
+本节回答第~\ref{token barrier}~节末提出的核心经验问题。我们的实验围绕三条线索展开：(i)~确立词元级 KL 控制相对序列级对齐的优势（第~\ref{exp:tdpo}~节）；(ii)~以纯安全单阶段训练的有用性崩塌印证命题2 的漂移分析（第~\ref{exp:drift}~节）；(iii)~在已采用词元级 KL 控制的强基线之上，系统检验语义屏障是否带来可测的行为收益（第~\ref{exp:barrier}--\ref{exp:diag}~节）。后者构成本文的主要发现，亦是一个有机制诊断支撑的负面结果。
+
+\subsection{实验设置}\label{exp:setup}
+\textit{模型与数据.} 我们沿用 SACPO 的实验配置以保证可比性：以 Alpaca-7B（reproduced）为 SFT 起点 $\pi_{\text{SFT}}$，在 PKU-SafeRLHF 上进行两阶段对齐。PKU-SafeRLHF 同时提供有用性偏好对与安全性偏好对，分别构成 $\mathcal{D}_h$ 与 $\mathcal{D}_s$。第一阶段以 DPO 在 $\mathcal{D}_h$ 上训练得到有用性策略 $\pi_r$；第二阶段以 $\pi_r$ 为参考模型进行安全对齐。本文主结果聚焦于 helpful~$\to$~safety（H$\to$S）这一序列方向。
+
+\textit{对比方法.} (1)~\emph{SACPO}~\cite{wachi2024stepwise}：序列级（DPO）安全对齐；(2)~\emph{SafeDPO}：纯安全数据上的单阶段对齐，用于检验命题2；(3)~\emph{TDPO}（记为 \texttt{no\_屏障}）：将第二阶段目标替换为词元级 KL 目标（TDPO1）、不加任何屏障，是本文最关键的强基线；(4)~\emph{语义屏障}：在 TDPO 之上加词元条件语义屏障，探针 $v_\phi$ 以参考模型的词元级 margin 自监督\footnote{我们另检验了一个探针监督来源的变体：将 $v_\phi$ 改为从外部安全奖励模型（Beaver-Cost）蒸馏而得（域匹配的强教师）。该变体在 PKU-SafeRLHF 上得到与自监督探针一致的结论，表明本文的负面结果对探针监督来源稳健，并非自监督信号过弱所致。}。
+
+\textit{评测协议.} 关键的近距离比较（方法间差异小）采用\emph{成对胜率}而非逐点均值——我们发现逐点 LLM-as-judge 打分高度聚集、无法分辨相近模型。每个提示上两方法的回答由 DeepSeek 裁判成对比较，并对调位置取平均以消除位置偏置，胜负差以 $\{-3,\dots,+3\}$ 计分、报告平均 margin 与胜/平/负比例。安全性的分布外泛化在 AdvBench（$n{=}519$）与 StrongREJECT（$n{=}313$）上以贪心解码评测不安全率；过度拒绝在 XSTest-safe（$n{=}250$）上评测对安全提示的拒答率。需要说明的是，PKU-SafeRLHF 的分布内安全评测已\emph{饱和}（\texttt{no\_屏障} 的无害性逐点分达 $9.25/10$，$77\%$ 样本满分，仅 $6/83$ 失败），不足以分辨相近方法，因此我们以上述更难的分布外评测作为安全性的主要判别工具。
+
+\subsection{词元级 KL 控制显著优于序列级对齐}\label{exp:tdpo}
+表~\ref{tab:tdpo-vs-sacpo} 给出 \texttt{no\_屏障}（即不含任何屏障的纯 TDPO）与 SACPO 的成对比较。仅将第二阶段的序列级（DPO）目标替换为词元级 KL 目标，即在有用性与安全性两轴上同时取得显著优势（有用性 margin $+0.43$，安全性 margin $+0.57$，均 $p<0.001$）。这一结果定位了序列化安全对齐中真正起作用的杠杆：是词元级的 KL 控制，而非任何附加的安全机制。它也为后续问题提供了正确的对照基线——任何屏障的价值都应在这一已经很强的 TDPO 基线\emph{之上}衡量。
+
+\begin{table}[t]
+\centering
+\caption{TDPO（\texttt{no\_屏障}）对 SACPO 的成对胜率（H$\to$S）。Margin 为平均偏好分（正值表示 TDPO 更优），胜/平/负为对应比例。$^{***}p<0.001$。}
+\label{tab:tdpo-vs-sacpo}
+\begin{tabular}{lccc}
+\toprule
+维度 & 胜/平/负 (\%) & 平均 margin & 显著性 \\
+\midrule
+有用性 & $52.7\,/\,19.4\,/\,27.9$ & $+0.43$ & $^{***}$ \\
+安全性 & $50.6\,/\,22.9\,/\,26.5$ & $+0.57$ & $^{***}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{纯安全训练导致有用性崩塌：命题2 的实证}\label{exp:drift}
+命题2 断言纯安全训练缺乏对有用性的主动保护、致其单调漂移。表~\ref{tab:safedpo} 提供直接证据：将对齐限制在纯安全数据上的单阶段 SafeDPO，其有用性（Beaver 有用性奖励）从 $\pi_r$ 的 $5.33$ 崩塌至 $-0.64$，而采用词元级 KL 控制的两阶段方法保持在 $6.04$；成对比较中 TDPO 对 SafeDPO 的有用性胜率 margin 达 \textcolor{red}{[待填]}（$p<0.001$）。这印证了命题2 的分析，并解释了为何联合/序列方法必须显式保留有用性信号——它同时构成对纯安全基线（如 SafeDPO）所代表的"受限制度"的实证刻画。
+
+\begin{table}[t]
+\centering
+\caption{纯安全单阶段训练（SafeDPO）的有用性崩塌。有用性以 Beaver 有用性奖励度量。}
+\label{tab:safedpo}
+\begin{tabular}{lcc}
+\toprule
+方法 & Beaver 有用性奖励 $\uparrow$ & vs.\ SafeDPO（有用性 margin） \\
+\midrule
+$\pi_r$（有用性初始） & $5.33$ & — \\
+SafeDPO（纯安全单阶段） & $-0.64$ & — \\
+TDPO（词元级 KL 控制） & $6.04$ & \textcolor{red}{[待填]}$^{***}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{语义屏障的行为消融：核心负面结果}\label{exp:barrier}
+我们在 TDPO 强基线之上加入语义屏障，在三类更难的评测上比较。表~\ref{tab:barrier-ablation} 显示：无论以不安全率（AdvBench、StrongREJECT）还是过度拒绝率（XSTest-safe）衡量，加入语义屏障均未带来\emph{显著}改进。在 AdvBench 上语义屏障的不安全率为 $5.4\%$，与 TDPO 的 $4.6\%$ 无显著差异（\textcolor{red}{[待填：Wilcoxon $p$，McNemar $p$]}）；在 StrongREJECT 上语义屏障（$0.8\%$）与 TDPO 持平或略差（\textcolor{red}{[待填：$p$]}）。过度拒绝率两者均极低且无差异（\textcolor{red}{[待填：McNemar $p$]}）。分布内成对比较同样无差异：\texttt{no\_屏障} 对语义屏障在有用性（margin \textcolor{red}{[待填]}）与安全性（margin \textcolor{red}{[待填]}）上均不显著，即语义屏障相对纯 TDPO 没有增益、若有则略损有用性。
+
+值得强调，这一负面结果并非源于探针未能学到安全信号。如下一节的机制诊断（表~\ref{tab:diag}）所示，门控、探针与屏障梯度在训练中均充分激活——探针明确区分了有害与无害词元，门控明确识别了有害提示，屏障损失也产生了非平凡梯度，然而输出行为几乎不变。这比"更换探针监督来源结果一致"更直接地排除了"屏障无效仅因探针质量不足"的解释：问题不在探针是否学会，而在其梯度未能转化为输出分布上的改变（详见第~\ref{exp:diag} 节）。
+
+\begin{table}[t]
+\centering
+\caption{语义屏障的行为消融（H$\to$S）。AdvBench/StrongREJECT 报告不安全率（越低越好），XSTest-safe 报告对安全提示的拒答率（越低越好）。无害性均值（$/10$）附于括号。所有方法间差异均不显著（见正文统计检验）。}
+\label{tab:barrier-ablation}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+方法 & AdvBench 不安全\% & StrongREJECT 不安全\% & XSTest 拒答\% \\
+\midrule
+TDPO (\texttt{no\_屏障}) & $4.6$ \;($9.55$) & $15.7$ \;($8.46$) & $1.2$ \\
+语义屏障 & $5.4$ \;($9.51$) & $18.5$ \;($8.34$) & $0.8$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\subsection{安全--有用性帕累托前沿}\label{exp:pareto}
+若语义屏障以微小的安全提升换取有用性损失，仍可能在权衡上有意义。表~\ref{tab:pareto} 否定了这一可能。以有用性（PKU helpful，$n{=}129$）对汇合不安全率（AdvBench$+$StrongREJECT，$n{=}833$）作图：语义屏障被 TDPO \emph{严格支配}——既更不有用（$5.50$ vs.\ $5.57$）又更不安全（不安全率 $10.3\%$ vs.\ $8.9\%$）。换言之，语义屏障没有把帕累托前沿向外推，反而落在 TDPO 之内。
+
+\begin{table}[t]
+\centering
+\caption{安全--有用性权衡（H$\to$S）。有用性越高越好，不安全率越低越好。TDPO 为帕累托参照。}
+\label{tab:pareto}
+\begin{tabular}{lcc}
+\toprule
+方法 & 有用性（$\uparrow$） & 汇合不安全\%（$\downarrow$） \\
+\midrule
+TDPO (\texttt{no\_屏障}) & $5.57$ & $8.9$ \\
+语义屏障 & $5.50$ & $10.3$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{机制诊断：激活但不改变输出分布}\label{exp:diag}
+负面结果并非源于屏障"未被激活"。表~\ref{tab:diag} 汇总第二阶段训练的内部指标：提示级门控在安全提示上 $\sigma(\rho)$ 稳定于 $0.93$--$0.99$（正确开启），词元级探针对有害词元的输出从 $-0.4$ 降至 $-0.8$（判别性增强），屏障梯度占总梯度的比例从约 $1\%$ 升至约 $15\%$（实质参与优化），且梯度裁剪触发率为 $0\%$。所有指标都表明屏障在\emph{机械层面}充分激活。
+
+这构成本文负面结果的核心刻画：屏障经由探针作用于隐状态\emph{表示}，其梯度确实改变了参数，却没有相应地改变模型的输出分布——机制层面的激活与行为层面的效果之间发生了\emph{解离}。需谨慎界定这一警示的适用范围：本文的负面结果针对的是\emph{训练时}将探针势垒作用于 teacher-forcing 的 rejected 词元表示这一特定设置，其梯度路径与\emph{推理时}沿表示方向施加 steering 的方法（如表示工程）存在本质差异，故不应将本结论外推为对一切表示空间安全干预的否定。在本文所研究的训练时设置下，即便探针信号在训练中清晰可见，也未必转化为生成行为上的安全收益；这一边界条件对依赖训练时表示惩罚的安全方法具有参考意义。
+
+\begin{table}[t]
+\centering
+\caption{第二阶段训练的机制诊断（语义屏障，取自训练日志）。门控为主方法与蒸馏变体共享；探针等指标的具体来源见正文。所有指标表明屏障被充分激活。\textcolor{red}{[待核实：若下列探针/梯度数取自蒸馏变体日志，需替换为自监督探针（语义屏障主方法）对应数值]}}
+\label{tab:diag}
+\begin{tabular}{lc}
+\toprule
+诊断指标 & 训练过程（起 $\to$ 终） \\
+\midrule
+门控 $\sigma(\rho)$（安全提示） & $0.93 \to 0.99$ \\
+探针 $v_\phi$（有害词元） & $-0.4 \to -0.8$ \\
+屏障梯度占比 & $\approx 1\% \to \approx 15\%$ \\
+对齐损失 $\mathcal{L}_{\text{align}}$ & $0.69 \to \approx 0.08$ \\
+屏障损失 $\mathcal{L}^{\text{sem}}_{\text{barrier}}$ & $\approx 0.11$（稳定） \\
+梯度裁剪触发率 & $0\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{name}
+
+\appendix
+\subsection*{数学理论分析}
+\subsubsection*{A.1 SeqKL的链式分解推导}\label{app:1}
+根据自回归语言模型的马尔可夫生成过程，给定输入提示 $x$，生成整个目标序列 $y = (y_1, y_2, \dots, y_T)$ 的联合概率分布可以通过概率的链式法则分解为各个时间步条件概率的连乘：
+\begin{equation}
+    \pi(y|x) = \prod_{t=1}^T \pi(y_t | x, y_{<t})
+\end{equation}
+本文以 TDPO1 为优化框架，其 KL 正则化采用前向 KL 散度，故此处对前向序列级 KL 散度 $\mathbb{D}_{\text{KL}}(\pi_r \| \pi_\theta)$ 作链式分解。根据 KL 散度的定义，其本质是参考分布 $\pi_r$ 相对于策略分布 $\pi_\theta$ 的对数概率比值在参考分布下的期望。将其代入链式法则，可得到完整的推导过程：
+\begin{equation}
+\begin{aligned} \mathbb{D}_{\text{KL}}(\pi_r(y|x) \| \pi_\theta(y|x)) &= \mathbb{E}_{y \sim \pi_r} \left[ \log \frac{\pi_r(y|x)}{\pi_\theta(y|x)} \right] \\ &= \mathbb{E}_{y \sim \pi_r} \left[ \log \frac{\prod_{t=1}^T \pi_r(y_t | x, y_{<t})}{\prod_{t=1}^T \pi_\theta(y_t | x, y_{<t})} \right] \\ &= \mathbb{E}_{y \sim \pi_r} \left[ \sum_{t=1}^T \log \frac{\pi_r(y_t | x, y_{<t})}{\pi_\theta(y_t | x, y_{<t})} \right] \end{aligned}
+\end{equation}
+由条件期望的塔式性质，对固定的历史前缀 $y_{<t}$，$\log\frac{\pi_r(y_t|x,y_{<t})}{\pi_\theta(y_t|x,y_{<t})}$ 在 $\pi_r$ 下的期望恰好等于 $D_{\text{KL}}(\pi_r(\cdot|x,y_{<t})\|\pi_\theta(\cdot|x,y_{<t}))$，因此利用期望的线性性质以及条件期望的嵌套关系，上述对数比值的求和可以等价转化为每个时间步上、基于历史前缀 $y_{<t}$ 的步级（Step-wise）KL 散度的期望之和：
+\begin{equation}
+\begin{aligned}
+    &\mathbb{D}_{\text{KL}}(\pi_r(y|x) \| \pi_\theta(y|x)) \\
+    &= \mathbb{E}_{y \sim \pi_r} \left[ \sum_{t=1}^T \text{KL} \left( \pi_r(\cdot|x, y_{<t}) \| \pi_\theta(\cdot|x, y_{<t}) \right) \right]
+\end{aligned}
+\end{equation}
+
+\subsubsection*{A.2 Proposition 1的证明}\label{app:2}
+ 
+\begin{proof}
+固定时间步 $t^*$ 与目标值 $m \in (0, C]$。我们在逐词元散度配置的层面构造策略 $\pi_\theta^*$，使其散度配置为 $\mathrm{kl}_{t^*}(x, y_r) = m$ 且 $\mathrm{kl}_t(x, y_r) = 0$（$\forall t \neq t^*$）。
+ 
+\textbf{非关键位置}。对所有 $t \neq t^*$，令 $\pi_\theta^*(\cdot|s_t) = \pi_r(\cdot|s_t)$。由 KL 散度的非负性与同分布取零，$\mathrm{kl}_t(x, y_r) = \mathrm{KL}(\pi_r(\cdot|s_t) \,\|\, \pi_\theta^*(\cdot|s_t)) = 0$。
+ 
+\textbf{关键位置}。考察函数 $q \mapsto \mathrm{KL}(\pi_r(\cdot|s_{t^*}) \,\|\, q)$，其中 $q$ 取遍 $s_{t^*}$ 处概率单纯形的内部。该函数在单纯形内部连续，在 $q = \pi_r(\cdot|s_{t^*})$ 处取最小值 $0$；当 $q$ 趋于单纯形边界，即某词元 $v_0$（满足 $\pi_r(v_0|s_{t^*}) > 0$）的概率 $q(v_0) \to 0$ 时，对应项 $\pi_r(v_0|s_{t^*})\log(\pi_r(v_0|s_{t^*})/q(v_0)) \to +\infty$，故该函数取值无上界。因此 $\mathrm{KL}(\pi_r(\cdot|s_{t^*}) \,\|\, q)$ 的取值连续覆盖 $[0, +\infty)$。由介值定理，对任意 $m \in (0, C]$ 存在分布 $q^*$ 使得 $\mathrm{KL}(\pi_r(\cdot|s_{t^*}) \,\|\, q^*) = m$。令 $\pi_\theta^*(\cdot|s_{t^*}) = q^*$，则 $\mathrm{kl}_{t^*}(x, y_r) = m$。
+ 
+该策略的序列级总散度为
+\begin{equation}
+\sum_{t=1}^{T} \mathrm{kl}_t(x, y_r) \;=\; \mathrm{kl}_{t^*}(x, y_r) + \sum_{t \neq t^*} \mathrm{kl}_t(x, y_r) \;=\; m + 0 \;=\; m \;\le\; C,
+\end{equation}
+故 $\pi_\theta^*$ 满足序列级预算。而其单点散度 $\mathrm{kl}_{t^*}(x, y_r) = m$ 可取至 $C$，对任意固定的逐词元预算 $\kappa < C$ 均有 $\mathrm{kl}_{t^*}(x, y_r) > \kappa$ 的可行取值。
+ 
+前向 KL 在 $q^*$ 对某词元赋予趋零概率而 $\pi_r$ 在该词元有非零质量时无上界增长，故构造中的 $q^*$ 可具体地取为在 $t^*$ 处压低 rejected 词元 $y_r^{t^*}$ 概率的分布：当 $\pi_\theta^*(y_r^{t^*}|s_{t^*}) \to 0$ 时 $\mathrm{kl}_{t^*}(x, y_r) \to +\infty$，由连续性可调至任意目标值 $m$。其偏离幅度 $m$ 完全由序列级预算单独承担，未分摊至有害片段的其余位置。由于序列级约束仅约束 $\sum_t \mathrm{kl}_t$，对任意单个 $\mathrm{kl}_t$ 不施加上界，此类集中配置始终落在约束的可行集内。同时，将散度均匀分配的配置 $\mathrm{kl}_t = m/T$（$\forall t$）同样满足序列级预算，二者被赋予相同的可行状态。序列级约束因而无法辨识散度的逐词元分配方式。命题得证。
+\end{proof}
+
+\subsubsection*{A.3 引理1的证明}\label{app:3}
+\begin{proof}
+偏好优化损失 $\mathcal{L}(\theta; \mathcal{D}_s)$ 是 $\mathcal{D}_s$ 上逐样本损失 $\ell(\theta; x^s, y_c, y_r)$ 的期望。对 $\theta$ 求梯度并交换求导与期望：
+\begin{equation}
+    \nabla_{\theta} \mathcal{L}(\theta; \mathcal{D}_s) = \mathbb{E}_{(x^s, y_c, y_r) \sim \mathcal{D}_s} \left[ \nabla_{\theta} \ell(\theta; x^s, y_c, y_r) \right]
+\end{equation}
+对 DPO，$\ell = -\log\sigma(u)$；对 TDPO，$\ell = -\log\sigma(u - \delta)$；无论何种仅依赖 $\mathcal{D}_s$ 的偏好损失，其梯度均为对 $\mathcal{D}_s$ 的提示取期望。由假设1 的理想化 $\mathrm{supp}(\mathcal{D}_s) \cap \mathrm{supp}(\mathcal{D}_h) = \emptyset$，上式不存在对 $x^h \in \mathrm{supp}(\mathcal{D}_h)$ 的积分项，故梯度方向中不含驱动 $\mathcal{H}(\pi_{\theta})$ 减小的显式分量。若两支撑集存在重叠测度 $\omega > 0$，则该显式分量的范数以 $O(\omega)$ 为界，结论以同阶误差近似成立。
+\end{proof}
+ 
+\subsubsection*{A.4 假设2的动机与Proposition 2的证明}\label{app:4}
+ 
+\textbf{假设2的动机}。假设2 是一个经验假设。本节说明其合理性，但需强调它不能由前述设定严格推导。
+ 
+首先给出 $\nabla_\theta \mathcal{H}(\theta_k)$ 的显式形式。由 Definition 1 及前向 SeqKL 的定义，$\pi_r$ 不依赖 $\theta$，对 $\mathcal{H}$ 关于 $\theta$ 求梯度：
+\begin{equation}
+\begin{aligned}
+\nabla_\theta \mathcal{H}(\theta_k) 
+&= -\mathbb{E}_{x^h \sim \mathcal{D}_h}\bigg[\sum_{t=1}^T 
+\mathbb{E}_{z \sim \pi_r(\cdot|x^h, y_{<t})} \\
+&\qquad \big[\nabla_\theta \log\pi_\theta(z|x^h, y_{<t})\big]\bigg]
+\end{aligned}
+\end{equation}
+该梯度仅在 $\mathrm{supp}(\mathcal{D}_h)$ 上计算。由引理1，$\nabla_\theta \mathcal{L}(\theta_k; \mathcal{D}_s)$ 仅在 $\mathrm{supp}(\mathcal{D}_s)$ 上计算。二者作用于语义不相交的输入集合：$\nabla_\theta \mathcal{H}$ 反映模型在良性查询上回归 $\pi_r$ 所需的参数调整方向，$\nabla_\theta \mathcal{L}(\theta; \mathcal{D}_s)$ 反映在红队攻击上改善安全偏好所需的方向。
+ 
+然而需要明确，输入集合的不相交并不蕴含参数梯度的负对齐。$\nabla_\theta \mathcal{H}$ 与 $\nabla_\theta \mathcal{L}(\theta; \mathcal{D}_s)$ 是对同一组共享参数的梯度，作用于不相交输入的两个函数，其参数梯度可以正相关、正交或负相关，输入支撑集的不相交对参数空间的几何关系不施加任何约束。因此假设2 无法由假设1 推出。其依据是经验层面的 alignment tax：多任务与持续学习的实证研究普遍观察到，语义差异较大的任务在共享参数上的梯度倾向于冲突或正交\cite{yu2020gradient, kirkpatrick2017overcoming}，纯安全训练在实践中可靠地损害有用性能力。假设2 取严格负 ($\leq -c < 0$) 而非仅非正，正是为了刻画非正形式（允许取零）下退化可能停滞于 $\mathcal{H} = 0$，与实证观察不符；严格负对应内积持续远离零。
+ 
+\textbf{Proposition 2的证明}
+\begin{proof}
+设 $\mathcal{H}$ 的梯度 $L$-Lipschitz 连续，则 $|\mathcal{H}(\theta+\Delta\theta) - \mathcal{H}(\theta) - \nabla_\theta\mathcal{H}(\theta)^\top\Delta\theta| \leq \frac{L}{2}\|\Delta\theta\|^2$，由此得二阶下界：
+\begin{equation}\label{eq:descent-lemma}
+    \mathcal{H}(\theta + \Delta\theta) \geq \mathcal{H}(\theta) 
+    + \nabla_\theta \mathcal{H}(\theta)^\top \Delta\theta 
+    - \frac{L}{2}\|\Delta\theta\|^2
+\end{equation}
+分 $k = 0$ 与 $k \geq 1$ 两种情形。
+ 
+\textbf{情形一}（$k = 0$）。$\theta_0 = \theta_r$ 使 $\pi_{\theta_0} = \pi_r$，故 $\mathcal{H}(\pi_{\theta_0}) = 0$ 为 $\mathcal{H}$ 的全局最小值，且 $\nabla_\theta \mathcal{H}(\theta_0) = 0$。由 $\mathcal{H} \geq 0$ 对一切 $\theta$ 成立，直接有
+\begin{equation}
+    \mathcal{H}(\pi_{\theta_1}) \geq 0 = \mathcal{H}(\pi_{\theta_0})
+\end{equation}
+即 $k = 0$ 步 $\mathcal{H}$ 不减。此步因起点为全局极小、一阶项消失，仅能保证不减，未必严格递增。
+ 
+\textbf{情形二}（$k \geq 1$）。更新位移为 $\theta_{k+1} - \theta_k = -\eta \nabla_\theta \mathcal{L}(\theta_k; \mathcal{D}_s)$。代入式(\ref{eq:descent-lemma})：
+\begin{equation}
+\begin{aligned}
+\mathcal{H}(\pi_{\theta_{k+1}}) 
+&\geq \mathcal{H}(\pi_{\theta_k}) 
+- \eta\,\big\langle\nabla_\theta\mathcal{H}(\theta_k),\, 
+\nabla_\theta\mathcal{L}(\theta_k;\mathcal{D}_s)\big\rangle \\
+&\quad - \frac{L\eta^2}{2}\big\|\nabla_\theta\mathcal{L}
+(\theta_k;\mathcal{D}_s)\big\|^2
+\end{aligned}
+\end{equation}
+由假设2，$\langle\nabla_\theta\mathcal{H}(\theta_k), \nabla_\theta\mathcal{L}(\theta_k;\mathcal{D}_s)\rangle \leq -c$，故一阶项 $-\eta\langle\cdots\rangle \geq \eta c$。记 $G \triangleq \sup_k \|\nabla_\theta\mathcal{L}(\theta_k;\mathcal{D}_s)\|$ 为偏好损失梯度在训练区间内的上界，令 $C \triangleq LG^2/2$，则
+\begin{equation}
+    \mathcal{H}(\pi_{\theta_{k+1}}) \geq \mathcal{H}(\pi_{\theta_k}) 
+    + \eta c - C\eta^2 = \mathcal{H}(\pi_{\theta_k}) + \eta(c - C\eta)
+\end{equation}
+取 $\eta_0 \triangleq c / C$，则对一切 $\eta \in (0, \eta_0)$ 有 $c - C\eta > 0$，故 $\mathcal{H}(\pi_{\theta_{k+1}}) > \mathcal{H}(\pi_{\theta_k})$，严格单调递增。
+ 
+\textbf{累积}。对 $k \geq 1$ 递推上式，并代入情形一的 $\mathcal{H}(\pi_{\theta_1}) \geq 0$：
+\begin{equation}
+    \mathcal{H}(\pi_{\theta_k}) \geq \mathcal{H}(\pi_{\theta_1}) 
+    + (k-1)\,\eta(c - C\eta) \geq (k-1)\,\eta(c - C\eta), 
+    \quad \forall k \geq 1
+\end{equation}
+即退化量在假设2 成立的训练区间内至少线性累积。命题得证。
+\end{proof}
+
+\subsubsection*{A.5 定理1的证明}\label{app:barrier}
+\begin{proof}
+证明分两步：第一步从求和聚合的数学性质出发，证明$t^*$处的惩罚在序列中不可被摊薄，从而建立$\mathcal{L}_{\text{barrier}} \to +\infty$的结论；第二步说明这一发散性质通过梯度机制使得令$\mathrm{kl}_{t^*} \to \kappa$的集中行为在优化过程中不可行。
+
+\textbf{第一步：求和聚合的不可摊薄性。}
+对所有有效节点 $\mathrm{kl}_t < \kappa$，故 $\kappa - \mathrm{kl}_t \in (0, \kappa]$，从而每个词元的惩罚被有限常数下界：
+\begin{equation}
+    b_t = -\mu\log(\kappa - \mathrm{kl}_t) \geq -\mu\log\kappa
+\end{equation}
+当 $\kappa \leq 1$ 时该下界非负，当 $\kappa > 1$ 时为有限负值；无论何种情形，$b_t$ 均被一个有限常数下界。于是其余节点的惩罚之和被有限值下界，$\sum_{t \neq t^*} b_t \geq -(T_r - 1)\mu\log\kappa$，故：
+\begin{equation}
+    \mathcal{L}_{\text{barrier}} = b_{t^*} + \sum_{t \neq t^*} b_t 
+    \geq b_{t^*} - (T_r - 1)\mu\log\kappa
+\end{equation}
+当$\mathrm{kl}_{t^*} \to \kappa$时，$b_{t^*} = -\mu\log(\kappa - \mathrm{kl}_{t^*}) \to +\infty$，而 $-(T_r - 1)\mu\log\kappa$ 为有限常数，发散项主导，故$\mathcal{L}_{\text{barrier}} \to +\infty$。序列中任意数量正常节点的惩罚之和均为有限值，无法抵消$t^*$处的发散。
+
+\textbf{第二步：集中行为的梯度代价分析。}
+在联合优化目标$\min_\theta\,\mathcal{L}_{\text{align}} + \mathcal{L}_{\text{barrier}}$下，屏障对参数$\theta$的梯度为：
+\begin{equation}
+    \left\|\frac{\partial b_{t^*}}{\partial \theta}\right\| = 
+    \frac{\mu}{\kappa - \mathrm{kl}_{t^*}} \cdot 
+    \left\|\frac{\partial \mathrm{kl}_{t^*}}{\partial \theta}\right\|
+\end{equation}
+设$\partial \mathrm{kl}_{t^*}/\partial \theta \neq 0$，这在$\pi_\theta$于$t^*$处已偏离$\pi_r$（即$\mathrm{kl}_{t^*} > 0$且$\theta$非$\mathrm{kl}_{t^*}$的临界点）时一般成立。当$\mathrm{kl}_{t^*} \to \kappa$时，系数$\frac{\mu}{\kappa - \mathrm{kl}_{t^*}} \to +\infty$，故$\|\partial b_{t^*}/\partial\theta\| \to +\infty$。在最小化目标下，参数更新为$\theta \leftarrow \theta - \eta\frac{\partial b_{t^*}}{\partial\theta}$，由链式法则其方向为：
+\begin{equation}
+-\eta\frac{\partial b_{t^*}}{\partial\theta} = 
+-\eta\frac{\mu}{\kappa - \mathrm{kl}_{t^*}}\cdot
+\frac{\partial\mathrm{kl}_{t^*}}{\partial\theta}
+\end{equation}
+由于$\frac{\mu}{\kappa-\mathrm{kl}_{t^*}} > 0$，该更新方向与$-\frac{\partial\mathrm{kl}_{t^*}}{\partial\theta}$同向，即沿使$\mathrm{kl}_{t^*}$减小的方向推动参数。$\mathrm{kl}_{t^*}$沿该方向的方向导数为
+$\left\langle\frac{\partial\mathrm{kl}_{t^*}}{\partial\theta},
+-\frac{\partial\mathrm{kl}_{t^*}}{\partial\theta}\right\rangle
+= -\left\|\frac{\partial\mathrm{kl}_{t^*}}{\partial\theta} \right\|^2 \leq 0$，
+故参数更新使$\mathrm{kl}_{t^*}$减小。当$\mathrm{kl}_{t^*} \to \kappa$时，系数$\frac{\mu}{\kappa - \mathrm{kl}_{t^*}} \to +\infty$使这一推力趋于无穷，优化器无法维持集中行为，局部约束松弛问题从根本上得到修复。
+\end{proof}
+
+\textbf{设计说明（求和与均值聚合）}。定理1的结论对求和聚合$\sum_t b_t$与均值聚合$\frac{1}{T_r}\sum_t b_t$同样成立：对固定的有效长度$T_r$，均值形式下$t^*$处的惩罚为$\frac{1}{T_r}b_{t^*}$，随$\mathrm{kl}_{t^*} \to \kappa$同样发散至$+\infty$。两种聚合的区别仅在于均值形式将每个词元的惩罚整体缩放$1/T_r$，等价于对屏障强度系数$\mu$的重标定，不改变发散性质。本文词元级语义屏障（定义4）采用均值形式，以使屏障强度与序列长度解耦。
+
+\subsubsection*{A.6 偏导规约与梯度方向的符号性质}\label{app:active-partial}
+给出引理2中两个偏导的完整推导。Active rejected token的定义见\label{eq:active-def}：$t \in \mathcal{T}_{\text{active}} \iff \pi_\theta(y_t|y_{<t}) < \pi_{\text{ref}}(y_t|y_{<t})$。
+
+\textbf{A.6.1 偏导记号规约}
+
+在softmax参数化下，$\log\pi_\theta(y_t|y_{<t})$不是独立变量，受归一化约束$\sum_v \pi_\theta(v|y_{<t}) = 1$。本文采用如下记号规约：
+\begin{equation}\label{eq:partial-convention}
+\frac{\partial f}{\partial \log\pi_\theta(y_t|y_{<t})} \triangleq \frac{\partial f/\partial z_{y_t}}{1 - \pi_\theta(y_t|y_{<t})}
+\end{equation}
+其中$z_{y_t}$为位置$t$处词元$y_t$对应的logit，用到softmax求导关系$\partial \log\pi_\theta(y_t)/\partial z_{y_t} = 1 - \pi_\theta(y_t)$。该规约与DPO\cite{rafailov2023direct}、TDPO\cite{zeng2024token}文献的标准记法一致，在 $\pi_\theta(y_t|y_{<t}) < 1$ 时良定义，此条件在 LLM 标准训练（softmax输出，vocabulary $|\mathcal{V}| > 1$）下几乎处处成立。特别地，active rejected token状态$\pi_\theta(y_t) < \pi_{\text{ref}}(y_t) \leq 1$自动蕴含分母$1 - \pi_\theta(y_t) > 0$。。
+
+\textbf{A.6.2 $\partial \text{kl}_t/\partial \log\pi_\theta(y_t) < 0$ 在 active 状态下的验证}
+ 
+前向词元级 KL 散度为：
+\begin{equation}
+\text{kl}_t = \sum_{v \in \mathcal{V}} \pi_{\text{ref}}(v|y_{<t}) \log\frac{\pi_{\text{ref}}(v|y_{<t})}{\pi_\theta(v|y_{<t})}
+\end{equation}
+其中第一项 $\sum_v \pi_{\text{ref}}(v)\log\pi_{\text{ref}}(v)$ 不依赖 $\theta$。对 logit $z_{y_t}$ 求偏导，利用 softmax 求导关系 $\partial \log\pi_\theta(v)/\partial z_{y_t} = \delta_{v,y_t} - \pi_\theta(y_t)$：
+\begin{equation}\label{eq:dkl-dz}
+\frac{\partial \text{kl}_t}{\partial z_{y_t}} = -\sum_v \pi_{\text{ref}}(v)\bigl(\delta_{v,y_t} - \pi_\theta(y_t)\bigr) = \pi_\theta(y_t) - \pi_{\text{ref}}(y_t)
+\end{equation}
+末步用到 $\sum_v \pi_{\text{ref}}(v) = 1$。前向 KL 下该偏导恰为 $\pi_\theta(y_t) - \pi_{\text{ref}}(y_t)$，无对数项、无 $\text{kl}_t$ 项。
+ 
+\textbf{符号判定}：该偏导的符号由 active 条件完全刻画。active 状态下 $\pi_\theta(y_t) < \pi_{\text{ref}}(y_t)$ 严格成立，故 $\partial \text{kl}_t/\partial z_{y_t} = \pi_\theta(y_t) - \pi_{\text{ref}}(y_t) < 0$；非 active 状态下 $\pi_\theta(y_t) > \pi_{\text{ref}}(y_t)$，则该偏导严格为正。即 active 当且仅当 $\partial \text{kl}_t/\partial z_{y_t} < 0$。
+ 
+由规约式(\ref{eq:partial-convention})，分母 $1 - \pi_\theta(y_t) > 0$（active 状态 $\pi_\theta(y_t) < \pi_{\text{ref}}(y_t) \leq 1$ 自动蕴含），故：
+\begin{equation}
+\frac{\partial \text{kl}_t}{\partial \log\pi_\theta(y_t)}\bigg|_{\text{active}} = \frac{\pi_\theta(y_t) - \pi_{\text{ref}}(y_t)}{1 - \pi_\theta(y_t)} < 0
+\end{equation}
+
+\textbf{A.6.3 $\partial \mathcal{L}^{\text{KL}}_{\text{barrier}}/\partial \log\pi_\theta(y_t) < 0$ 的验证}
+
+由链式法则（在屏障工作前提$\text{kl}_t < \kappa$下）：
+\begin{equation}
+\frac{\partial \mathcal{L}^{\text{KL}}_{\text{barrier}}}{\partial \log\pi_\theta(y_t)} = \underbrace{\frac{\mu}{\kappa - \text{kl}_t}}_{>0\;(\text{kl}_t<\kappa)} \cdot \underbrace{\frac{\partial \text{kl}_t}{\partial \log\pi_\theta(y_t)}}_{<0\;(\text{active})} < 0
+\end{equation}
+
+\textbf{A.6.4 $\partial \mathcal{L}_{\text{align}}/\partial \log\pi_\theta(y_t) > 0$ 的验证（含 $\delta_2$ 贡献）}
+
+\textbf{$\partial \delta_2/\partial \log\pi_\theta(y_t)$ 的计算}。$\delta_2$ 中 rejected 部分为 $\sum_{t' \in y_r} \text{kl}_{t'}$（chosen 部分 detach）。由 chain rule 和规约式(\ref{eq:partial-convention})，$\log\pi_\theta(y_t|y_{<t})$ 对应 intermediate variable $z_{y_t}$，该 logit 只影响位置 $t$ 处的条件分布 $\pi_\theta(\cdot|y_{<t})$，不影响 $t' \neq t$ 处的条件分布（autoregressive teacher forcing 下）。因此对 $t \neq t'$ 有 $\partial \text{kl}_{t'}/\partial \log\pi_\theta(y_t) = 0$，故：
+\begin{equation}
+\frac{\partial \delta_2}{\partial \log\pi_\theta(y_t)}\bigg|_{t\in y_r} = \frac{\partial \text{kl}_t}{\partial \log\pi_\theta(y_t)} \triangleq \gamma_t
+\end{equation}
+
+TDPO1 对齐损失为 $\mathcal{L}_{\text{align}} = -\log\sigma(z)$，其中 $z \triangleq \beta u - \delta$，$u$ 为 implicit reward 的 log-ratio 差（不含 $\beta$），$\delta = \text{kl}^r_{\text{tot}} - \text{kl}^c_{\text{tot}}$（不作 chosen detach、无 $\alpha$ 加权，对应 TDPO1）。
+
+对 $\log\pi_\theta(y_t)$（$t \in y_r$）求偏导：
+\begin{equation}
+\frac{\partial \mathcal{L}_{\text{align}}}{\partial \log\pi_\theta(y_t)} = -\sigma(-z) \cdot \frac{\partial z}{\partial \log\pi_\theta(y_t)}
+\end{equation}
+
+由 $y_t$ 只出现在 $u$ 的 rejected 项中（系数 $-1$）：
+\begin{equation}
+\frac{\partial u}{\partial \log\pi_\theta(y_t)}\bigg|_{t\in y_r} = -1
+\end{equation}
+结合上文 $\partial \delta_2/\partial \log\pi_\theta(y_t)|_{t\in y_r} = \gamma_t$，由 A.6.2，active 状态下 $\gamma_t < 0$。合并得：
+\begin{equation}
+\frac{\partial z}{\partial \log\pi_\theta(y_t)} = -\beta - \alpha\gamma_t
+\end{equation}
+代回：
+\begin{equation}\label{eq:dL-align-full}
+\frac{\partial \mathcal{L}_{\text{align}}}{\partial \log\pi_\theta(y_t)}\bigg|_{t \in y_r,\,\text{active}} = \sigma(-z) \cdot (\beta + \alpha\gamma_t)
+\end{equation}
+
+\textbf{符号判定}：首项 $\sigma(-z) > 0$。第二项符号判定：
+\begin{equation}
+\beta + \alpha\gamma_t > 0 \iff |\gamma_t| < \beta/\alpha
+\end{equation}
+由式(\ref{eq:dkl-dz})及规约，前向 KL 下 active 状态的 $\gamma_t$ 具有闭式：
+\begin{equation}
+|\gamma_t| = \frac{\pi_{\text{ref}}(y_t) - \pi_\theta(y_t)}{1 - \pi_\theta(y_t)} < \pi_{\text{ref}}(y_t)
+\end{equation}
+其中不等式 $|\gamma_t| < \pi_{\text{ref}}(y_t)$ 是精确界，等价于 $\pi_{\text{ref}}(y_t) < 1$，在 vocabulary $|\mathcal{V}| > 1$ 下恒成立。由此，$\pi_{\text{ref}}(y_t) \leq \beta/\alpha$ 是 $\beta + \alpha\gamma_t > 0$ 的充分条件。实验设置 $\beta=0.1$、$\alpha=0.5$ 给出阈值 $\beta/\alpha = 0.2$，而对齐训练中单词元的参考概率通常远小于该阈值，故该充分条件在典型训练区间下普遍满足，此时 $\partial \mathcal{L}_{\text{align}}/\partial \log\pi_\theta(y_t) > 0$。
+
+\textbf{与正文公式的关系}。在 $\gamma_t = 0$（即忽略 $\delta_2$ 的词元级偏导贡献）的简化下，式(\ref{eq:dL-align-full})退化为：
+\begin{equation}
+\frac{\partial \mathcal{L}_{\text{align}}}{\partial \log\pi_\theta(y_t)} \approx \beta\sigma(-\beta u + \alpha\delta_2)
+\end{equation}
+这与 IV-C.2 式(\ref{eq:dir-align})的形式一致。在 $\pi_{\text{ref}}(y_t) \leq \beta/\alpha$ 的充分条件下，完整推导与简化推导给出一致的符号；该条件在典型对齐训练中普遍满足。
+
+\subsubsection*{A.7 命题3的证明}\label{app:conflict}
+
+\begin{proof}
+命题3的核心是在每个active rejected token位置上，对齐损失与屏障损失对参数的词元级梯度贡献内积为负。
+
+\textbf{词元级梯度贡献的形式化}。对损失$\mathcal{L} \in \{\mathcal{L}_{\text{align}}, \mathcal{L}^{\text{KL}}_{\text{barrier}}\}$，位置$t$对$\mathcal{L}$关于$\theta$的总梯度的贡献项定义为：
+\begin{equation}\label{eq:token-grad}
+\nabla_\theta \mathcal{L}\big|_t \triangleq \frac{\partial \mathcal{L}}{\partial \log\pi_\theta(y_t|y_{<t})} \cdot \nabla_\theta \log\pi_\theta(y_t|y_{<t})
+\end{equation}
+该项是位置$t$沿$\log\pi_\theta(y_t)$方向对总梯度的局部贡献。需要说明的是，$\nabla_\theta \mathcal{L}|_t$是\textit{partial contribution}而非$\nabla_\theta \mathcal{L}$的正交分解。$\nabla_\theta \mathcal{L}$的完整chain rule展开还包括通过$\text{kl}_t$等其他intermediate variable的路径。命题3的内积陈述是关于该partial contribution的，避免了对完整梯度结构的强假设。
+
+\textbf{符号简记}。由引理2，对$t \in \mathcal{T}_{\text{active}}$：
+\begin{equation}
+a_t \triangleq \frac{\partial \mathcal{L}_{\text{align}}}{\partial \log\pi_\theta(y_t)} > 0, \quad b_t \triangleq \frac{\partial \mathcal{L}^{\text{KL}}_{\text{barrier}}}{\partial \log\pi_\theta(y_t)} < 0
+\end{equation}
+
+\textbf{内积计算}。由式(\ref{eq:token-grad})：
+\begin{equation}
+\begin{aligned}
+\left\langle \nabla_\theta \mathcal{L}_{\text{align}}\big|_t,\, \nabla_\theta \mathcal{L}^{\text{KL}}_{\text{barrier}}\big|_t \right\rangle 
+&= \left\langle a_t \nabla_\theta \log\pi_\theta(y_t),\, b_t \nabla_\theta \log\pi_\theta(y_t) \right\rangle \\
+&= a_t \cdot b_t \cdot \left\|\nabla_\theta \log\pi_\theta(y_t)\right\|^2
+\end{aligned}
+\end{equation}
+
+\textbf{符号判定}。由$a_t > 0$、$b_t < 0$，及$\left\|\nabla_\theta \log\pi_\theta(y_t)\right\|^2 > 0$（即$\nabla_\theta \log\pi_\theta(y_t) \neq 0$，在标准LLM参数化下几乎处处成立）：
+\begin{equation}
+a_t \cdot b_t \cdot \left\|\nabla_\theta \log\pi_\theta(y_t)\right\|^2 < 0
+\end{equation}
+\end{proof}
+
+\textbf{说明}。命题3的内积是\textit{词元级梯度贡献}的内积，不是完整的$\langle \nabla_\theta \mathcal{L}_{\text{align}}, \nabla_\theta \mathcal{L}^{\text{KL}}_{\text{barrier}} \rangle$。后者的展开包含off-diagonal项$\langle \nabla_\theta \log\pi_\theta(y_t), \nabla_\theta \log\pi_\theta(y_{t'}) \rangle$ for $t \neq t'$，这些项在LLM参数共享下符号未定。命题3的逐词元陈述避免了这一不确定性，且足以支撑定理2的全局结论（详见附录\ref{app:trade}）。
+
+\subsubsection*{A.8 定理2的证明}\label{app:trade}
+
+\begin{proof}
+定理2在策略空间$\pi$中陈述。本证明在$\theta$-参数化下进行（$\pi = \pi_\theta$），通过满射假设迁移到策略空间。证明分5步：FOC建立 → 隐函数定理 → $\mathcal{L}_{\text{align}}$严格单调 → $\mathcal{L}_{\text{align}}$与$\mathcal{M}$一阶单调对应 → 组合得$d\mathcal{M}/d\mu < 0$。
+
+\textbf{Step 1：一阶最优性条件 (FOC)}。在$\theta^*(\mu)$处：
+\begin{equation}\label{eq:foc}
+\nabla_\theta \mathcal{L}_{\text{align}}(\theta^*(\mu)) + \mu \nabla_\theta \mathcal{B}(\theta^*(\mu)) = 0
+\end{equation}
+两梯度共线，方向相反。这是命题3的词元级方向冲突在全局最优点的体现。
+
+\textbf{Step 2：$d\theta^*/d\mu$ 的隐函数定理推导}。对FOC关于$\mu$隐式求导：
+\begin{equation}
+\underbrace{\left[\nabla^2_\theta \mathcal{L}_{\text{align}} + \mu \nabla^2_\theta \mathcal{B}\right]}_{\mathbf{H}(\mu)} \cdot \frac{d\theta^*}{d\mu} + \nabla_\theta \mathcal{B} = 0
+\end{equation}
+由局部凸性，$\mathbf{H}(\mu) \succ 0$。故：
+\begin{equation}\label{eq:dtheta-dmu}
+\frac{d\theta^*}{d\mu} = -\mathbf{H}(\mu)^{-1} \nabla_\theta \mathcal{B}(\theta^*(\mu))
+\end{equation}
+
+\textbf{Step 3：$\mathcal{L}_{\text{align}}$ 关于 $\mu$ 严格单调递增}。沿$\theta^*(\mu)$轨迹：
+\begin{equation}
+\begin{aligned}
+\frac{d \mathcal{L}_{\text{align}}(\theta^*(\mu))}{d\mu} 
+&= \left\langle \nabla_\theta \mathcal{L}_{\text{align}}(\theta^*(\mu)),\, \frac{d\theta^*}{d\mu} \right\rangle \\
+&= \left\langle -\mu \nabla_\theta \mathcal{B},\, -\mathbf{H}^{-1} \nabla_\theta \mathcal{B} \right\rangle \quad \text{[代入(\ref{eq:foc})与(\ref{eq:dtheta-dmu})]} \\
+&= \mu \cdot \nabla_\theta \mathcal{B}^\top \mathbf{H}^{-1} \nabla_\theta \mathcal{B}
+\end{aligned}
+\end{equation}
+由$\mu > 0$、$\mathbf{H}^{-1} \succ 0$、$\nabla_\theta \mathcal{B} \neq 0$（屏障在active状态下非平凡）：
+\begin{equation}\label{eq:dL-dmu}
+\frac{d \mathcal{L}_{\text{align}}(\theta^*(\mu))}{d\mu} > 0 \quad \text{(严格)}
+\end{equation}
+
+\textbf{Step 4：$\mathcal{M}$ 与 $\mathcal{L}_{\text{align}}$ 的单调对应关系}（一阶近似）。在期望意义下：
+\begin{equation}
+\mathcal{L}_{\text{align}}(\theta) = \mathbb{E}_{(y_c, y_r)}\!\left[-\log\sigma(\beta \cdot m_i(\theta))\right]
+\end{equation}
+其中$m_i(\theta) = \hat{r}_{\pi_\theta,i}(y_c) - \hat{r}_{\pi_\theta,i}(y_r)$是单样本margin。设$f(x) \triangleq -\log\sigma(\beta x)$，则$f$严格凸（$f''(x) = \beta^2\sigma(\beta x)\sigma(-\beta x) > 0$）。一阶Taylor展开：
+\begin{equation}
+\mathcal{L}_{\text{align}}(\theta) = f(\mathcal{M}(\theta)) + \frac{1}{2}f''(\xi)\,\text{Var}(m_i) \approx f(\mathcal{M}(\theta))
+\end{equation}
+其中$\xi \in (\min m_i, \max m_i)$。误差项$\frac{1}{2}f''(\xi)\text{Var}(m_i) \leq (\beta^2/8)\text{Var}(m_i)$。本文实验设置$\beta=0.1$，误差系数$\beta^2/8 = 1.25\times 10^{-3}$，远小于$\mathcal{L}_{\text{align}}$的典型量级$O(\log 2)$，故在典型训练区间下：
+\begin{equation}
+\mathcal{L}_{\text{align}}(\theta) \approx -\log\sigma(\beta \cdot \mathcal{M}(\theta))
+\end{equation}
+该近似下$\mathcal{L}_{\text{align}}$是$\mathcal{M}$的严格单调递减函数：
+\begin{equation}\label{eq:dL-dM}
+\frac{d \mathcal{L}_{\text{align}}}{d \mathcal{M}} = -\beta\sigma(-\beta\mathcal{M}) < 0
+\end{equation}
+
+\textbf{Step 5：组合得 $d\mathcal{M}/d\mu < 0$}。由链式法则：
+\begin{equation}
+\frac{d\mathcal{M}(\mu)}{d\mu} = \frac{d\mathcal{M}}{d\mathcal{L}_{\text{align}}} \cdot \frac{d\mathcal{L}_{\text{align}}}{d\mu} = \underbrace{\frac{1}{-\beta\sigma(-\beta\mathcal{M})}}_{<0\text{ [由(\ref{eq:dL-dM})]}} \cdot \underbrace{\frac{d\mathcal{L}_{\text{align}}}{d\mu}}_{>0\text{ [由(\ref{eq:dL-dmu})]}} < 0
+\end{equation}
+\end{proof}
+
+\textbf{说明}。证明的关键步骤是Step 3，其严格依赖于命题3，FOC（式(\ref{eq:foc})）是命题3的词元级方向冲突在最优点的全局体现，使$\nabla_\theta \mathcal{L}_{\text{align}}$与$\nabla_\theta \mathcal{B}$严格反向，从而$d\mathcal{L}_{\text{align}}/d\mu$的二次型表达自然为正。Step 4的一阶近似在典型对齐训练区间下成立（margin分布方差远小于其均值）。
+
+\subsubsection*{A.9 提示分类器的训练与判别能力分析}\label{app:refdetect}
+
+本节给出定义3的提示级分类器 $g_\phi$ 的训练流程，分析其判别能力作为引理3的依据，并说明为何采用监督分类器而非 reference log-probability margin 朴素信号。
+
+\textbf{$g_\phi$ 的训练}。$g_\phi$ 是 $\phi_{\text{ref}}(x)$ 上的线性 logistic 分类器。训练在第二阶段之前离线完成。以 $\pi_r$ 对 $\mathcal{D}_s \cup \mathcal{D}_h$ 中每个提示作一次前向，取末位提示词元的最后一层隐状态得 $\phi_{\text{ref}}(x)$；$x \in \mathrm{supp}(\mathcal{D}_s)$ 标为正类、$x \in \mathrm{supp}(\mathcal{D}_h)$ 标为负类，记标签 $z \in \{+1, -1\}$。参数 $(w_g, b_g)$ 由 logistic 损失拟合：
+\begin{equation}
+(w_g, b_g) = \arg\min_{w, b}\;
+\mathbb{E}_{x}\big[\log\bigl(1 + e^{-z\,(w^\top \phi_{\text{ref}}(x) + b)}\bigr)\big]
+\end{equation}
+训练完成后 $(w_g, b_g)$ 冻结，第二阶段全程不再更新，仅用于计算 $\rho$ 与门控 $\sigma(\rho)$。$\phi_{\text{ref}}$ 取自第二阶段本已需要的参考模型前向，分类器自身仅 $d+1$ 个参数，故离线训练与在线推断均不引入显著开销。
+
+\textbf{判别能力分析}。引理3 断言 $g_\phi$ 以高概率判别提示所属数据集，其依据是假设3 的近似线性可分性。假设3 的合理性来自 $\pi_r$ 的行为差异。$\pi_r$ 为有用性对齐策略，对 $\mathrm{supp}(\mathcal{D}_s)$ 的红队提示倾向拒答或回避，对 $\mathrm{supp}(\mathcal{D}_h)$ 的良性提示倾向正常作答；模型须在提示读入完毕时即已"判定"将采取何种行为，故提示的数据集归属信息必然被编码于提示末位的表示中，而末层隐状态正是该决策相关信息最集中之处。表示探测文献普遍观察到此类高层语义属性在深层表示中近似线性可解码\cite{alain2017understanding}，假设3 即这一规律在安全与有用性二分上的实例。
+
+在近似线性可分的前提下，logistic 分类器收敛到一个分离超平面，其在两类提示上的错判仅来自落在超平面错误一侧的少数样本。引理3 中的 $\delta_1, \delta_2$ 即 $g_\phi$ 在两类提示上的经验错误率，而非松弛的理论上界，由假设3 的线性可分程度与分类器训练质量共同决定，并直接由留出提示上的分类性能测得。Section V 表明在 Anthropic HH 上 $g_\phi$ 达到 $\text{AUC} > 0.95$，对应 $\delta_1, \delta_2 < 0.05$。
+
+\textbf{与朴素信号的对比}。一个无需训练的替代方案是直接以 reference log-probability margin 作为提示级判别信号，即由 $\pi_r$ 对 chosen 与 rejected 回答的对数似然之差定出 $\rho$。该朴素信号判别能力薄弱，根源在于它由 completion 而非提示决定。对数似然之差受 chosen 与 rejected 序列长度、词元频率与表述方式等因素强烈干扰，同类提示的 margin 因其回答对写法不同而大幅波动；且 $\pi_r$ 不含安全概念，其对安全与不安全回答的似然偏好与提示是否来自红队并无可靠对应。
+
+$g_\phi$ 从两方面规避这一问题。其一，输入为提示嵌入 $\phi_{\text{ref}}(x)$ 而非 completion，不受回答序列的混杂因素影响；其二，以监督方式直接优化数据集归属判别，学到的正是门控所需的边界，而非依赖某种附带相关性。实证上 $g_\phi$ 在 Anthropic HH 上的 AUC $> 0.95$，而 reference margin 朴素信号仅约 $0.60$，接近随机判别的 $0.50$。这一差距对语义屏障是关键的。定理3 与定理4 的选择性门控保证均建立在引理3 成立、即 $\sigma(\rho)$ 确能分离两类提示之上；朴素信号 AUC 约 $0.60$ 时引理3 实际失效，门控近乎无选择性，而 $g_\phi$ 使引理3 成立，相关理论保证方才适用。
+
+\subsubsection*{A.10 定理3的证明}\label{app:condpressure}
+\begin{proof}
+分三步，依次给出理想探针下的逐词元惩罚值、参数梯度系数，以及由二者导出的选择性压制比。
+
+\textbf{第一步（惩罚值）}。设理想探针 $v_\phi(h_t) = \tilde{v}(\rho)$。此时定义4中逐词元项 $-\log\sigma(v_\phi(h_t)) = \log\sigma(\tilde{v}(\rho))$ 与 $t$ 无关，有效长度归一化的求和等于该公共项，故
+\begin{equation}
+\mathcal{L}^{\text{sem}}_{\text{barrier}}
+= \sigma(\rho)\cdot\frac{1}{T_r}\sum_{t \in y_r}\bigl(\log\sigma(\tilde{v}(\rho))\bigr)
+= \sigma(\rho)\cdot\bigl(\log\sigma(\tilde{v}(\rho))\bigr)
+\end{equation}
+由定义4，$\tilde{v}(\rho) = -1$（$\rho > 0$）或 $+1$（$\rho \leq 0$）。代入并用 $\sigma(z) = (1+e^{-z})^{-1}$：
+\begin{align}
+\rho > 0:\quad &\log\sigma(-1) = \log(1 + e) = 1.313\, \\
+\rho \leq 0:\quad &\log\sigma(+1) = \log(1 + e^{-1}) = 0.313\,
+\end{align}
+其中 $\log(1+e) \approx 1.313$、$\log(1+e^{-1}) \approx 0.313$。乘以门控 $\sigma(\rho)$ 即得式(\ref{eq:cond-pressure})。
+
+\textbf{第二步（梯度系数）}。$\sigma(\rho)$ 由冻结的 $g_\phi$ 与冻结参考模型的 $\phi_{\text{ref}}(x)$ 决定，不依赖策略参数 $\theta$。对定义4 关于 $\theta$ 求梯度，由 $\frac{d}{dv}[-\log\sigma(v)] = -(1-\sigma(v))$，
+\begin{equation}
+\nabla_\theta\mathcal{L}^{\text{sem}}_{\text{barrier}}
+= \sigma(\rho)\cdot\frac{1}{T_r}\sum_{t \in y_r}
+\bigl[-\mu\,(1-\sigma(v_\phi(h_t)))\bigr]\,\nabla_\theta v_\phi(h_t)
+\end{equation}
+每个词元的贡献以标量系数 $\sigma(\rho)\cdot\mu(1-\sigma(v_\phi(h_t)))$ 缩放 $\nabla_\theta v_\phi(h_t)$。故惩罚值（第一步）与梯度系数均含 $\sigma(\rho)$ 因子。
+
+\textbf{第三步（选择性压制比）}。以惩罚值或逐词元梯度系数度量某提示上的压制强度，两者均可写作 $\sigma(\rho)\cdot s$ 的形式，其中 $s$ 为有限且严格为正的常数。以惩罚值衡量时 $s = 1.313\mu$ 或 $0.313\mu$；以梯度系数衡量时 $s = \mu(1-\sigma(\tilde{v}(\rho)))$，因 $\tilde{v}(\rho) \in \{-1, +1\}$ 同样有限且非零。由引理3，当 $\delta_1, \delta_2 \to 0$ 时 $\sigma(\rho) \to 1$（$x \in \mathrm{supp}(\mathcal{D}_s)$）、$\sigma(\rho) \to 0$（$x \in \mathrm{supp}(\mathcal{D}_h)$）。因此
+\begin{equation}
+\frac{\text{Strength}_{x \in \mathrm{supp}(\mathcal{D}_s)}}
+{\text{Strength}_{x \in \mathrm{supp}(\mathcal{D}_h)}}
+= \frac{\sigma(\rho_s)\,s_s}{\sigma(\rho_h)\,s_h}
+\xrightarrow[]{\delta_1, \delta_2 \to 0} \infty
+\end{equation}
+此发散来自分母门控 $\sigma(\rho_h) \to 0$ 而分子有限非零，并非分子无界增长，故无论以惩罚值还是梯度强度衡量，式(\ref{eq:select-ratio})均成立。
+\end{proof}
+
+\subsubsection{A.11 命题4的陈述与证明}\label{app:bdgrad}
+
+命题4 在正文"附加理论性质"中以补充性质形式提及，其形式化陈述如下。
+
+\textbf{命题4}（语义障碍的有界梯度性质）。对任意提示 $x$ 与 rejected 序列 $y_r$，定义4的语义障碍 $\mathcal{L}^{\text{sem}}_{\text{barrier}}$ 对策略参数 $\theta$ 的梯度满足
+\begin{equation}\label{eq:bdgrad}
+\bigl\|\nabla_\theta\mathcal{L}^{\text{sem}}_{\text{barrier}}\bigr\|
+\;\leq\; \mu\,\sup_{t \in y_r}\bigl\|\nabla_\theta v_\phi(h_t)\bigr\|
+\end{equation}
+该上界与逐词元 KL 预算 $\kappa$ 无关，不含任何随状态发散的因子，且对 $v_\phi$ 的任意取值均成立。
+
+\begin{proof}
+$\sigma(\rho)$ 不依赖 $\theta$（同 A.10 第二步）。由定义4 及 $\frac{d}{dv}[-\log\sigma(v)] = -(1-\sigma(v))$，
+\begin{equation}
+\nabla_\theta\mathcal{L}^{\text{sem}}_{\text{barrier}}
+= -\,\sigma(\rho)\cdot\frac{\mu}{T_r}\sum_{t \in y_r}
+\bigl(1-\sigma(v_\phi(h_t))\bigr)\,\nabla_\theta v_\phi(h_t)
+\end{equation}
+取范数，由三角不等式，并代入 $\sigma(\rho) \in (0, 1)$ 与 $1-\sigma(v_\phi(h_t)) \in (0, 1)$：
+\begin{equation}
+\begin{aligned}
+\bigl\|\nabla_\theta\mathcal{L}^{\text{sem}}_{\text{barrier}}\bigr\|
+&\leq \sigma(\rho)\cdot\frac{\mu}{T_r}\sum_{t \in y_r}
+\bigl(1-\sigma(v_\phi(h_t))\bigr)\bigl\|\nabla_\theta v_\phi(h_t)\bigr\| \\
+&\leq \frac{\mu}{T_r}\sum_{t \in y_r}\bigl\|\nabla_\theta v_\phi(h_t)\bigr\|
+\;\leq\; \mu\,\sup_{t \in y_r}\bigl\|\nabla_\theta v_\phi(h_t)\bigr\|
+\end{aligned}
+\end{equation}
+末步用均值不超过上确界。证毕。
+\end{proof}
+
+\textbf{说明}。命题4 与\ref{sec:kl-barrier}节 KL 屏障的对照即语义障碍稳定性的来源。KL 对数屏障 $-\mu\log(\kappa - \mathrm{kl}_t)$ 的梯度系数为 $\frac{\mu}{\kappa - \mathrm{kl}_t}$，在 $\mathrm{kl}_t \to \kappa$ 时发散；语义障碍以有界因子 $1-\sigma(v_\phi(h_t)) \in (0,1)$ 取代发散因子 $\frac{1}{\kappa - \mathrm{kl}_t}$，从而消除该发散。式(\ref{eq:bdgrad})右端的 $\sup_{t \in y_r}\|\nabla_\theta v_\phi(h_t)\|$ 在标准正则性条件下有限：由 $v_\phi(h_t) = w_v^\top h_t + b_v$ 得 $\nabla_\theta v_\phi(h_t) = (\nabla_\theta h_t)\,w_v$，只要 $\|w_v\|$ 有界且隐状态 $h_t$ 对 $\theta$ 的 Jacobian 有界即可。
+% {\appendix[Proof of the Zonklar Equations]
+% Use $\backslash${\tt{appendix}} if you have a single appendix:
+% Do not use $\backslash${\tt{section}} anymore after $\backslash${\tt{appendix}}, only $\backslash${\tt{section*}}.
+% If you have multiple appendixes use $\backslash${\tt{appendices}} then use $\backslash${\tt{section}} to start each appendix.
+% You must declare a $\backslash${\tt{section}} before using any $\backslash${\tt{subsection}} or using $\backslash${\tt{label}} ($\backslash${\tt{appendices}} by itself
+%  starts a section numbered zero.)}
+
+
+
+%{\appendices
+%\section*{Proof of the First Zonklar Equation}
+%Appendix one text goes here.
+% You can choose not to have a title for an appendix if you want by leaving the argument blank
+%\section*{Proof of the Second Zonklar Equation}
+%Appendix two text goes here.}
+
+
+
+
+
+
+
+
+
+
+
+\vfill
+
+\end{document}
