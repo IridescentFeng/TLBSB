@@ -228,7 +228,7 @@ SACPO 在第二阶段使用纯安全数据集 $\mathcal{D}_s$ 进行偏好优化
 
 定理1 表明任意数量正常节点的有限惩罚无法抵消 $t^*$ 处的发散，从而消除了命题1所述散度集中的可行性基础。但 KL 直接约束存在一个根本性局限，定理2 将证明其约束强度与可达学习深度之间存在不可调和的全局权衡。
 
-\textbf{记号（Active Rejected Token）}。Active rejected token 指 rejected 序列 $y_r$ 中 policy 分布低于参考分布的位置：
+\textbf{记号（活跃拒绝词元，Active Rejected Token）}。活跃拒绝词元指 rejected 序列 $y_r$ 中策略分布低于参考分布的位置：
 \begin{equation}\label{eq:active-def}
 \mathcal{T}_{\text{active}} = \{t \in y_r : \pi_\theta(y_t|y_{<t}) < \pi_{\text{ref}}(y_t|y_{<t})\}
 \end{equation}
@@ -267,21 +267,21 @@ SACPO 在第二阶段使用纯安全数据集 $\mathcal{D}_s$ 进行偏好优化
 \subsubsection{语义屏障的构建}\label{sec:semantic-barrier}
 本节构造语义屏障（一种词元条件的屏障），由两个并行线性探针组成：提示级分类器 $g_\phi$ 提供提示级选择信号，词元级安全探针 $v_\phi$ 提供词元级强度信号，二者通过乘法门控组合。
 
-\textbf{定义2}（Token级安全探针,SAP）。在策略模型最后一层隐状态 $h_t(x,y) \in \mathbb{R}^d$ 之上挂载线性探针，输出词元位置 $t$ 的安全评分：
+\textbf{定义2}（词元级安全探针，Safety-Aware Probe，SAP）。在策略模型最后一层隐状态 $h_t(x,y) \in \mathbb{R}^d$ 之上挂载线性探针，输出词元位置 $t$ 的安全评分：
 \begin{equation}\label{eq:sap-form}
     v_\phi(h_t) = w_v^\top h_t + b_v \in \mathbb{R}
 \end{equation}
 参数量仅 $d+1$，不引入显著计算开销。其蒸馏预训练流程见第~\ref{Dmix SAP}节。
 
-\textbf{假设3}（Prompt Embedding的线性可分性）。参考模型对 $\mathrm{supp}(\mathcal{D}_s)$ 与 $\mathrm{supp}(\mathcal{D}_h)$ 的提示生成语义相反的响应（接续有害内容 vs.\ 拒绝回答），提示的数据集归属信息因而被编码于参考模型的表示空间。记 $\phi_{\text{ref}}(x) \in \mathbb{R}^d$ 为参考模型在 $x$ 末位提示词元处的最后一层隐状态。我们假设该归属信息在 $\phi_{\text{ref}}$ 空间中近似线性可分，这与表示探测文献的实证规律一致\cite{alain2017understanding}。
+\textbf{假设3}（提示嵌入的线性可分性）。参考模型对 $\mathrm{supp}(\mathcal{D}_s)$ 与 $\mathrm{supp}(\mathcal{D}_h)$ 的提示生成语义相反的响应（接续有害内容 vs.\ 拒绝回答），提示的数据集归属信息因而被编码于参考模型的表示空间。记 $\phi_{\text{ref}}(x) \in \mathbb{R}^d$ 为参考模型在 $x$ 末位提示词元处的最后一层隐状态。我们假设该归属信息在 $\phi_{\text{ref}}$ 空间中近似线性可分，这与表示探测文献的实证规律一致\cite{alain2017understanding}。
 
-\textbf{定义3}（Reference-Conditioned Prompt Classifier）。基于假设3，定义提示级判别信号 $\rho$ 为参考模型提示 embedding 上的线性分类器：
+\textbf{定义3}（参考条件提示分类器，Reference-Conditioned Prompt Classifier）。基于假设3，定义提示级判别信号 $\rho$ 为参考模型提示 embedding 上的线性分类器：
 \begin{equation}\label{eq:prompt-classifier}
 \rho \triangleq g_\phi(\phi_{\text{ref}}(x)) = w_g^\top \phi_{\text{ref}}(x) + b_g
 \end{equation}
 $g_\phi$ 通过对带数据集标签的提示（$x \in \mathrm{supp}(\mathcal{D}_s)$ 标为正类、$x \in \mathrm{supp}(\mathcal{D}_h)$ 标为负类）的监督二分类训练得到，训练完成后冻结（训练细节见附录\ref{app:refdetect}）。区别于直接使用 reference log-probability margin 的朴素信号，$g_\phi$ 以监督方式直接优化数据集归属判别，不受 completion 序列长度等混杂因素干扰。
 
-\textbf{引理3}（Prompt Classifier的判别能力）。在假设3下，监督训练的 $g_\phi$ 以高概率判别提示所属数据集：
+\textbf{引理3}（提示分类器的判别能力）。在假设3下，监督训练的 $g_\phi$ 以高概率判别提示所属数据集：
 \begin{equation}\label{eq:refdetect-s}
 \Pr\left[\rho > 0 \mid x \in \mathrm{supp}(\mathcal{D}_s)\right] \geq 1 - \delta_1
 \end{equation}
@@ -292,14 +292,14 @@ $g_\phi$ 通过对带数据集标签的提示（$x \in \mathrm{supp}(\mathcal{D}
 
 由引理3，$\sigma(\rho)$ 构成软化的提示级门控：$x \in \mathrm{supp}(\mathcal{D}_s)$ 时 $\sigma(\rho) \to 1$，$x \in \mathrm{supp}(\mathcal{D}_h)$ 时 $\sigma(\rho) \to 0$。
 
-\textbf{定义4}（Semantic Barrier with Soft Gating）。结合提示级门控 $\sigma(\rho)$ 与词元级探针 $v_\phi$，语义障碍定义为二者的乘法组合：
+\textbf{定义4}（软门控语义屏障，Semantic Barrier with Soft Gating）。结合提示级门控 $\sigma(\rho)$ 与词元级探针 $v_\phi$，语义屏障定义为二者的乘法组合：
 \begin{equation}\label{eq:semantic-barrier}
-\mathcal{L}^{\text{sem}}_{\text{barrier}} = \underbrace{\sigma(\rho)}_{\text{prompt-level gate}} \cdot \underbrace{\frac{1}{T_r}\sum_{t \in y_r} -\log\sigma\!\left(v_\phi(h_t)\right)}_{\text{token-level barrier}}
+\mathcal{L}^{\text{sem}}_{\text{barrier}} = \underbrace{\sigma(\rho)}_{\text{提示级门控}} \cdot \underbrace{\frac{1}{T_r}\sum_{t \in y_r} -\log\sigma\!\left(v_\phi(h_t)\right)}_{\text{词元级屏障}}
 \end{equation}
 其中 $v_\phi$ 通过蒸馏预训练获得（训练流程见第~\ref{Dmix SAP}节），其输出对不安全词元为负值、对安全词元为正值，与上式对数障碍的惩罚方向一致。乘法门控使屏障受两级判别调制：$\sigma(\rho) \to 0$ 时整个屏障归零，与 $v_\phi$ 无关；$\sigma(\rho) \to 1$ 时强度由 $v_\phi$ 逐位决定。
 
 \subsubsection{语义屏障的理论保证}\label{sec:barrier-theory}
-\textbf{定理3}（条件性选择压制）。设 SAP 完美拟合定义4的条件目标，即 $v_\phi(h_t) = \tilde{v}(\rho)$。则在 rejected 词元上语义障碍的逐词元惩罚值为：
+\textbf{定理3}（条件性选择压制）。设 SAP 完美拟合定义4的条件目标，即 $v_\phi(h_t) = \tilde{v}(\rho)$。则在 rejected 词元上语义屏障的逐词元惩罚值为：
 \begin{equation}\label{eq:cond-pressure}
 \mathcal{L}^{\text{sem}}_{\text{barrier}}\bigg|_{t \in y_r} = \begin{cases}
 \sigma(\rho) \cdot 1.313, & x \in \mathrm{supp}(\mathcal{D}_s)\;(\rho > 0)\\
@@ -312,7 +312,7 @@ $g_\phi$ 通过对带数据集标签的提示（$x \in \mathrm{supp}(\mathcal{D}
 \end{equation}
 均成立。证明见附录\ref{app:condpressure}。
 
-\textbf{备注2}（语义障碍的设计意图）。语义障碍对 rejected 序列每个有害词元独立施加惩罚，在损失层面旨在迫使对有害片段的分布式抑制，使单点过拟合无法再借由其余位置的零惩罚满足偏好目标。与定理1 的硬屏障不同，其逐位强度由词元级探针 $v_\phi$ 条件性决定，而非对 $\mathrm{kl}_t$ 施加发散的硬上界；式(\ref{eq:select-ratio})的选择性压制比趋于无穷源于分母趋零（$\mathrm{supp}(\mathcal{D}_h)$ 上屏障随 $\sigma(\rho)\to0$ 消失），而非分子无界增长。须强调：这描述的是屏障损失的结构性设计意图；该设计是否在训练后转化为输出分布上对摊薄的实际抑制，不由本节的损失级刻画所保证，而是实验节检验的经验问题。
+\textbf{备注2}（语义屏障的设计意图）。语义屏障对 rejected 序列每个有害词元独立施加惩罚，在损失层面旨在迫使对有害片段的分布式抑制，使单点过拟合无法再借由其余位置的零惩罚满足偏好目标。与定理1 的硬屏障不同，其逐位强度由词元级探针 $v_\phi$ 条件性决定，而非对 $\mathrm{kl}_t$ 施加发散的硬上界；式(\ref{eq:select-ratio})的选择性压制比趋于无穷源于分母趋零（$\mathrm{supp}(\mathcal{D}_h)$ 上屏障随 $\sigma(\rho)\to0$ 消失），而非分子无界增长。须强调：这描述的是屏障损失的结构性设计意图；该设计是否在训练后转化为输出分布上对摊薄的实际抑制，不由本节的损失级刻画所保证，而是实验节检验的经验问题。
 
 \textbf{备注3}（蒸馏探针下的适用性）。定理3的数值常数$1.313 = -\log\sigma(-1)$ 与 $0.313 = -\log\sigma(+1)$对应 $v_\phi \in \{-1,+1\}$ 的理想拟合情形。采用蒸馏探针时，$v_\phi$ 输出外部安全评估模型的连续评分，具体数值有所不同，但定理3的核心结论不受影响：选择性压制比趋于无穷（式~(\ref{eq:select-ratio})）仅依赖门控因子 $\sigma(\rho_s)\to 1$ 与 $\sigma(\rho_h)\to 0$，
 与 $v_\phi$ 的具体取值无关；惩罚的方向排序（不安全词元惩罚高于安全词元）由蒸馏目标的符号约定保证，即令$c(x,y_r)<0$ 对应不安全回答，与定义4的对数障碍方向一致。
@@ -327,9 +327,9 @@ $g_\phi$ 通过对带数据集标签的提示（$x \in \mathrm{supp}(\mathcal{D}
 \end{equation}
 该结论仅依赖引理3与定义4的乘法门控结构，不需 SAP 完美拟合假设。
 
-\textbf{备注4}（语义障碍不构成额外的漂移来源）。命题3 与定理2 表明硬 KL 屏障与对齐梯度的冲突是词元无关的，在良性提示 $\mathrm{supp}(\mathcal{D}_h)$ 上同样发生，而该处对齐梯度正是有用性学习信号，冲突即阻碍有用性学习。定理4 表明语义障碍的这一冲突被 $\sigma(\rho)$ 门控限制在 $\mathrm{supp}(\mathcal{D}_s)$ 内，$\mathrm{supp}(\mathcal{D}_h)$ 上其梯度渐近为零。在理论层面，这仅排除了语义屏障自身成为额外漂移来源的可能；它并不蕴含屏障能修复命题2 的漂移。漂移是否被缓解、以及屏障在行为上是否带来安全收益，均为经验问题，见实验节。
+\textbf{备注4}（语义屏障不构成额外的漂移来源）。命题3 与定理2 表明硬 KL 屏障与对齐梯度的冲突是词元无关的，在良性提示 $\mathrm{supp}(\mathcal{D}_h)$ 上同样发生，而该处对齐梯度正是有用性学习信号，冲突即阻碍有用性学习。定理4 表明语义屏障的这一冲突被 $\sigma(\rho)$ 门控限制在 $\mathrm{supp}(\mathcal{D}_s)$ 内，$\mathrm{supp}(\mathcal{D}_h)$ 上其梯度渐近为零。在理论层面，这仅排除了语义屏障自身成为额外漂移来源的可能；它并不蕴含屏障能修复命题2 的漂移。漂移是否被缓解、以及屏障在行为上是否带来安全收益，均为经验问题，见实验节。
 
-\textbf{附加理论性质}。语义障碍的参数梯度被$\mu\sup_t\|\nabla_\theta v_\phi(h_t)\|$全局有界(命题4,证明见附录\ref{app:bdgrad}),不含 KL 屏障在 $\mathrm{kl}_t \to \kappa$时的梯度发散因子。
+\textbf{附加理论性质}。语义屏障的参数梯度被$\mu\sup_t\|\nabla_\theta v_\phi(h_t)\|$全局有界(命题4,证明见附录\ref{app:bdgrad}),不含 KL 屏障在 $\mathrm{kl}_t \to \kappa$时的梯度发散因子。
 
 \subsection{安全探针的离线蒸馏训练}\label{Dmix SAP}
 安全探针 $v_\phi$ 与提示级门控 $g_\phi$ 均在第二阶段开始前离线训练并冻结。其监督需要安全与良性两类提示的覆盖，为此我们使用混合数据集 $\mathcal{D}_{\text{mix}} = \mathcal{D}_s \cup \mathcal{D}_h$ 仅作为探针/门控的训练数据；第二阶段的对齐损失仍仅在 $\mathcal{D}_s$ 上计算（见第~\ref{sec:total-loss}~节），$\mathcal{D}_{\text{mix}}$ 不参与对齐目标，亦不作为命题2 漂移的修复手段。
@@ -357,7 +357,7 @@ $g_\phi$ 通过对带数据集标签的提示（$x \in \mathrm{supp}(\mathcal{D}
    \log\sigma\bigl(v_\phi(h_t)\bigr)\Bigg]
 \end{aligned}
 \end{equation}
-完整训练流程见 Algorithm \ref{alg:1} 与 \ref{alg:2}。
+完整训练流程见算法~\ref{alg:1} 与~\ref{alg:2}。
 
 \begin{algorithm}[h]
 \caption{语义屏障两阶段训练流程}
@@ -403,7 +403,7 @@ $g_\phi$ 通过对带数据集标签的提示（$x \in \mathrm{supp}(\mathcal{D}
 \STATE 计算 $u(x,y_c,y_r)$ 与 $\delta(x,y_c,y_r)$
 \STATE $\mathcal{L}_{\text{align}} \leftarrow
        -\log\sigma\!\left(\beta u - \delta\right)$
-\STATE \textbf{// 语义障碍（SAP 冻结，无梯度）}
+\STATE \textbf{// 语义屏障（SAP 冻结，无梯度）}
 \STATE $\rho \leftarrow g_\phi(\phi_{\text{ref}}(x))$
 \STATE $v_\phi(h_t) \leftarrow w_v^\top h_t + b_v$
 \STATE $\mathcal{L}^{\text{sem}}_{\text{barrier}} \leftarrow
@@ -580,7 +580,7 @@ TDPO (\texttt{no\_屏障}) & $5.57$ & $8.9$ \\
  
 \textbf{假设2的动机}。假设2 是一个经验假设。本节说明其合理性，但需强调它不能由前述设定严格推导。
  
-首先给出 $\nabla_\theta \mathcal{H}(\theta_k)$ 的显式形式。由 Definition 1 及前向 SeqKL 的定义，$\pi_r$ 不依赖 $\theta$，对 $\mathcal{H}$ 关于 $\theta$ 求梯度：
+首先给出 $\nabla_\theta \mathcal{H}(\theta_k)$ 的显式形式。由定义1及前向 SeqKL 的定义，$\pi_r$ 不依赖 $\theta$，对 $\mathcal{H}$ 关于 $\theta$ 求梯度：
 \begin{equation}
 \begin{aligned}
 \nabla_\theta \mathcal{H}(\theta_k) 
@@ -593,7 +593,7 @@ TDPO (\texttt{no\_屏障}) & $5.57$ & $8.9$ \\
  
 然而需要明确，输入集合的不相交并不蕴含参数梯度的负对齐。$\nabla_\theta \mathcal{H}$ 与 $\nabla_\theta \mathcal{L}(\theta; \mathcal{D}_s)$ 是对同一组共享参数的梯度，作用于不相交输入的两个函数，其参数梯度可以正相关、正交或负相关，输入支撑集的不相交对参数空间的几何关系不施加任何约束。因此假设2 无法由假设1 推出。其依据是经验层面的 alignment tax：多任务与持续学习的实证研究普遍观察到，语义差异较大的任务在共享参数上的梯度倾向于冲突或正交\cite{yu2020gradient, kirkpatrick2017overcoming}，纯安全训练在实践中可靠地损害有用性能力。假设2 取严格负 ($\leq -c < 0$) 而非仅非正，正是为了刻画非正形式（允许取零）下退化可能停滞于 $\mathcal{H} = 0$，与实证观察不符；严格负对应内积持续远离零。
  
-\textbf{Proposition 2的证明}
+\textbf{命题2的证明}
 \begin{proof}
 设 $\mathcal{H}$ 的梯度 $L$-Lipschitz 连续，则 $|\mathcal{H}(\theta+\Delta\theta) - \mathcal{H}(\theta) - \nabla_\theta\mathcal{H}(\theta)^\top\Delta\theta| \leq \frac{L}{2}\|\Delta\theta\|^2$，由此得二阶下界：
 \begin{equation}\label{eq:descent-lemma}
@@ -675,7 +675,7 @@ $\left\langle\frac{\partial\mathrm{kl}_{t^*}}{\partial\theta},
 \textbf{设计说明（求和与均值聚合）}。定理1的结论对求和聚合$\sum_t b_t$与均值聚合$\frac{1}{T_r}\sum_t b_t$同样成立：对固定的有效长度$T_r$，均值形式下$t^*$处的惩罚为$\frac{1}{T_r}b_{t^*}$，随$\mathrm{kl}_{t^*} \to \kappa$同样发散至$+\infty$。两种聚合的区别仅在于均值形式将每个词元的惩罚整体缩放$1/T_r$，等价于对屏障强度系数$\mu$的重标定，不改变发散性质。本文词元级语义屏障（定义4）采用均值形式，以使屏障强度与序列长度解耦。
 
 \subsubsection*{A.6 偏导规约与梯度方向的符号性质}\label{app:active-partial}
-给出引理2中两个偏导的完整推导。Active rejected token的定义见\label{eq:active-def}：$t \in \mathcal{T}_{\text{active}} \iff \pi_\theta(y_t|y_{<t}) < \pi_{\text{ref}}(y_t|y_{<t})$。
+给出引理2中两个偏导的完整推导。活跃拒绝词元的定义见\eqref{eq:active-def}：$t \in \mathcal{T}_{\text{active}} \iff \pi_\theta(y_t|y_{<t}) < \pi_{\text{ref}}(y_t|y_{<t})$。
 
 \textbf{A.6.1 偏导记号规约}
 
@@ -859,7 +859,7 @@ a_t \cdot b_t \cdot \left\|\nabla_\theta \log\pi_\theta(y_t)\right\|^2 < 0
 
 \textbf{判别能力分析}。引理3 断言 $g_\phi$ 以高概率判别提示所属数据集，其依据是假设3 的近似线性可分性。假设3 的合理性来自 $\pi_r$ 的行为差异。$\pi_r$ 为有用性对齐策略，对 $\mathrm{supp}(\mathcal{D}_s)$ 的红队提示倾向拒答或回避，对 $\mathrm{supp}(\mathcal{D}_h)$ 的良性提示倾向正常作答；模型须在提示读入完毕时即已"判定"将采取何种行为，故提示的数据集归属信息必然被编码于提示末位的表示中，而末层隐状态正是该决策相关信息最集中之处。表示探测文献普遍观察到此类高层语义属性在深层表示中近似线性可解码\cite{alain2017understanding}，假设3 即这一规律在安全与有用性二分上的实例。
 
-在近似线性可分的前提下，logistic 分类器收敛到一个分离超平面，其在两类提示上的错判仅来自落在超平面错误一侧的少数样本。引理3 中的 $\delta_1, \delta_2$ 即 $g_\phi$ 在两类提示上的经验错误率，而非松弛的理论上界，由假设3 的线性可分程度与分类器训练质量共同决定，并直接由留出提示上的分类性能测得。Section V 表明在 Anthropic HH 上 $g_\phi$ 达到 $\text{AUC} > 0.95$，对应 $\delta_1, \delta_2 < 0.05$。
+在近似线性可分的前提下，logistic 分类器收敛到一个分离超平面，其在两类提示上的错判仅来自落在超平面错误一侧的少数样本。引理3 中的 $\delta_1, \delta_2$ 即 $g_\phi$ 在两类提示上的经验错误率，而非松弛的理论上界，由假设3 的线性可分程度与分类器训练质量共同决定，并直接由留出提示上的分类性能测得。第~\ref{exp:diag}~节的实验表明在 Anthropic HH 上 $g_\phi$ 达到 $\text{AUC} > 0.95$，对应 $\delta_1, \delta_2 < 0.05$。
 
 \textbf{与朴素信号的对比}。一个无需训练的替代方案是直接以 reference log-probability margin 作为提示级判别信号，即由 $\pi_r$ 对 chosen 与 rejected 回答的对数似然之差定出 $\rho$。该朴素信号判别能力薄弱，根源在于它由 completion 而非提示决定。对数似然之差受 chosen 与 rejected 序列长度、词元频率与表述方式等因素强烈干扰，同类提示的 margin 因其回答对写法不同而大幅波动；且 $\pi_r$ 不含安全概念，其对安全与不安全回答的似然偏好与提示是否来自红队并无可靠对应。
 
@@ -900,11 +900,11 @@ $g_\phi$ 从两方面规避这一问题。其一，输入为提示嵌入 $\phi_{
 此发散来自分母门控 $\sigma(\rho_h) \to 0$ 而分子有限非零，并非分子无界增长，故无论以惩罚值还是梯度强度衡量，式(\ref{eq:select-ratio})均成立。
 \end{proof}
 
-\subsubsection{A.11 命题4的陈述与证明}\label{app:bdgrad}
+\subsubsection*{A.11 命题4的陈述与证明}\label{app:bdgrad}
 
 命题4 在正文"附加理论性质"中以补充性质形式提及，其形式化陈述如下。
 
-\textbf{命题4}（语义障碍的有界梯度性质）。对任意提示 $x$ 与 rejected 序列 $y_r$，定义4的语义障碍 $\mathcal{L}^{\text{sem}}_{\text{barrier}}$ 对策略参数 $\theta$ 的梯度满足
+\textbf{命题4}（语义屏障的有界梯度性质）。对任意提示 $x$ 与 rejected 序列 $y_r$，定义4的语义屏障 $\mathcal{L}^{\text{sem}}_{\text{barrier}}$ 对策略参数 $\theta$ 的梯度满足
 \begin{equation}\label{eq:bdgrad}
 \bigl\|\nabla_\theta\mathcal{L}^{\text{sem}}_{\text{barrier}}\bigr\|
 \;\leq\; \mu\,\sup_{t \in y_r}\bigl\|\nabla_\theta v_\phi(h_t)\bigr\|
@@ -931,7 +931,7 @@ $\sigma(\rho)$ 不依赖 $\theta$（同 A.10 第二步）。由定义4 及 $\fra
 末步用均值不超过上确界。证毕。
 \end{proof}
 
-\textbf{说明}。命题4 与\ref{sec:kl-barrier}节 KL 屏障的对照即语义障碍稳定性的来源。KL 对数屏障 $-\mu\log(\kappa - \mathrm{kl}_t)$ 的梯度系数为 $\frac{\mu}{\kappa - \mathrm{kl}_t}$，在 $\mathrm{kl}_t \to \kappa$ 时发散；语义障碍以有界因子 $1-\sigma(v_\phi(h_t)) \in (0,1)$ 取代发散因子 $\frac{1}{\kappa - \mathrm{kl}_t}$，从而消除该发散。式(\ref{eq:bdgrad})右端的 $\sup_{t \in y_r}\|\nabla_\theta v_\phi(h_t)\|$ 在标准正则性条件下有限：由 $v_\phi(h_t) = w_v^\top h_t + b_v$ 得 $\nabla_\theta v_\phi(h_t) = (\nabla_\theta h_t)\,w_v$，只要 $\|w_v\|$ 有界且隐状态 $h_t$ 对 $\theta$ 的 Jacobian 有界即可。
+\textbf{说明}。命题4 与\ref{sec:kl-barrier}节 KL 屏障的对照即语义屏障稳定性的来源。KL 对数屏障 $-\mu\log(\kappa - \mathrm{kl}_t)$ 的梯度系数为 $\frac{\mu}{\kappa - \mathrm{kl}_t}$，在 $\mathrm{kl}_t \to \kappa$ 时发散；语义屏障以有界因子 $1-\sigma(v_\phi(h_t)) \in (0,1)$ 取代发散因子 $\frac{1}{\kappa - \mathrm{kl}_t}$，从而消除该发散。式(\ref{eq:bdgrad})右端的 $\sup_{t \in y_r}\|\nabla_\theta v_\phi(h_t)\|$ 在标准正则性条件下有限：由 $v_\phi(h_t) = w_v^\top h_t + b_v$ 得 $\nabla_\theta v_\phi(h_t) = (\nabla_\theta h_t)\,w_v$，只要 $\|w_v\|$ 有界且隐状态 $h_t$ 对 $\theta$ 的 Jacobian 有界即可。
 % {\appendix[Proof of the Zonklar Equations]
 % Use $\backslash${\tt{appendix}} if you have a single appendix:
 % Do not use $\backslash${\tt{section}} anymore after $\backslash${\tt{appendix}}, only $\backslash${\tt{section*}}.
